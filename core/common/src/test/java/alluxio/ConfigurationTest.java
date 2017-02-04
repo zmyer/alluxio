@@ -18,6 +18,11 @@ import org.junit.Assert;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.ExpectedException;
+import org.junit.rules.TemporaryFolder;
+
+import java.io.File;
+import java.io.FileOutputStream;
+import java.util.Properties;
 
 /**
  * Unit tests for the {@link Configuration} class.
@@ -26,15 +31,22 @@ public class ConfigurationTest {
   @Rule
   public final ExpectedException mThrown = ExpectedException.none();
 
+  @Rule
+  public final TemporaryFolder mFolder = new TemporaryFolder();
+
   @After
   public void after() {
     ConfigurationTestUtils.resetConfiguration();
   }
 
   @Test
-  public void defaultHomeCorrectlyLoaded() {
-    String alluxioHome = Configuration.get(PropertyKey.HOME);
-    Assert.assertEquals("/mnt/alluxio_default_home", alluxioHome);
+  public void defaultLoggerCorrectlyLoaded() throws Exception {
+    // Avoid interference from system properties. site-properties will not be loaded during tests
+    try (SetAndRestoreSystemProperty p =
+        new SetAndRestoreSystemProperty(PropertyKey.LOGGER_TYPE.toString(), null)) {
+      String loggerType = Configuration.get(PropertyKey.LOGGER_TYPE);
+      Assert.assertEquals("Console", loggerType);
+    }
   }
 
   @Test
@@ -224,10 +236,10 @@ public class ConfigurationTest {
   @Test
   public void variableSubstitution() {
     Configuration.merge(ImmutableMap.of(
-        PropertyKey.HOME, "value",
-        PropertyKey.LOGS_DIR, "${alluxio.home}"));
-    String substitution = Configuration.get(PropertyKey.HOME);
-    Assert.assertEquals("value", substitution);
+        PropertyKey.WORK_DIR, "value",
+        PropertyKey.LOGS_DIR, "${alluxio.work.dir}/logs"));
+    String substitution = Configuration.get(PropertyKey.LOGS_DIR);
+    Assert.assertEquals("value/logs", substitution);
   }
 
   @Test
@@ -243,11 +255,11 @@ public class ConfigurationTest {
   @Test
   public void recursiveVariableSubstitution() {
     Configuration.merge(ImmutableMap.of(
-        PropertyKey.HOME, "value",
-        PropertyKey.LOGS_DIR, "${alluxio.home}",
-        PropertyKey.SITE_CONF_DIR, "${alluxio.logs.dir}"));
+        PropertyKey.WORK_DIR, "value",
+        PropertyKey.LOGS_DIR, "${alluxio.work.dir}/logs",
+        PropertyKey.SITE_CONF_DIR, "${alluxio.logs.dir}/conf"));
     String substitution2 = Configuration.get(PropertyKey.SITE_CONF_DIR);
-    Assert.assertEquals("value", substitution2);
+    Assert.assertEquals("value/logs/conf", substitution2);
   }
 
   @Test
@@ -278,5 +290,65 @@ public class ConfigurationTest {
     Configuration.set(PropertyKey.USER_FILE_BUFFER_BYTES, "1GB");
     Assert.assertEquals(1073741824,
         (int) Configuration.getBytes(PropertyKey.USER_FILE_BUFFER_BYTES));
+  }
+
+  @Test
+  public void unset() {
+    Assert.assertFalse(Configuration.containsKey(PropertyKey.SECURITY_LOGIN_USERNAME));
+    Configuration.set(PropertyKey.SECURITY_LOGIN_USERNAME, "test");
+    Assert.assertTrue(Configuration.containsKey(PropertyKey.SECURITY_LOGIN_USERNAME));
+    Configuration.unset(PropertyKey.SECURITY_LOGIN_USERNAME);
+    Assert.assertFalse(Configuration.containsKey(PropertyKey.SECURITY_LOGIN_USERNAME));
+  }
+
+  @Test
+  public void unsetDefaultValue() {
+    Assert.assertTrue(Configuration.containsKey(PropertyKey.USER_FILE_BUFFER_BYTES));
+    Configuration.unset(PropertyKey.USER_FILE_BUFFER_BYTES);
+    Assert.assertFalse(Configuration.containsKey(PropertyKey.USER_FILE_BUFFER_BYTES));
+  }
+
+  @Test
+  public void propertyTestModeEqualsTrue() throws Exception {
+    Assert.assertTrue(Configuration.getBoolean(PropertyKey.TEST_MODE));
+  }
+
+  @Test
+  public void sitePropertiesNotLoadedInTest() throws Exception {
+    Properties props = new Properties();
+    props.setProperty(PropertyKey.LOGGER_TYPE.toString(), "TEST_LOGGER");
+    File propsFile = mFolder.newFile(Configuration.SITE_PROPERTIES);
+    props.store(new FileOutputStream(propsFile), "ignored header");
+    // Avoid interference from system properties. Reset SITE_CONF_DIR to include the temp
+    // site-properties file
+    try (SetAndRestoreSystemProperty p1 =
+             new SetAndRestoreSystemProperty(PropertyKey.LOGGER_TYPE.toString(), null);
+         SetAndRestoreSystemProperty p2 =
+             new SetAndRestoreSystemProperty(PropertyKey.SITE_CONF_DIR.toString(),
+                 mFolder.getRoot().getAbsolutePath())) {
+      Configuration.defaultInit();
+      Assert.assertEquals(PropertyKey.LOGGER_TYPE.getDefaultValue(),
+          Configuration.get(PropertyKey.LOGGER_TYPE));
+    }
+  }
+
+  @Test
+  public void sitePropertiesLoadedNotInTest() throws Exception {
+    Properties props = new Properties();
+    props.setProperty(PropertyKey.LOGGER_TYPE.toString(), "TEST_LOGGER");
+    File propsFile = mFolder.newFile(Configuration.SITE_PROPERTIES);
+    props.store(new FileOutputStream(propsFile), "ignored header");
+    // Avoid interference from system properties. Reset SITE_CONF_DIR to include the temp
+    // site-properties file
+    try (SetAndRestoreSystemProperty p1 =
+             new SetAndRestoreSystemProperty(PropertyKey.LOGGER_TYPE.toString(), null);
+         SetAndRestoreSystemProperty p2 =
+             new SetAndRestoreSystemProperty(PropertyKey.SITE_CONF_DIR.toString(),
+                 mFolder.getRoot().getAbsolutePath());
+         SetAndRestoreSystemProperty p3 =
+             new SetAndRestoreSystemProperty(PropertyKey.TEST_MODE.toString(), "false")) {
+      Configuration.defaultInit();
+      Assert.assertEquals("TEST_LOGGER", Configuration.get(PropertyKey.LOGGER_TYPE));
+    }
   }
 }

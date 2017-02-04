@@ -11,16 +11,25 @@
 
 package alluxio.client.block;
 
+import alluxio.Configuration;
 import alluxio.Constants;
+import alluxio.PropertyKey;
+import alluxio.Seekable;
+import alluxio.client.PositionedReadable;
+import alluxio.client.file.FileSystemContext;
 import alluxio.exception.ExceptionMessage;
 import alluxio.exception.PreconditionMessage;
+import alluxio.metrics.MetricsSystem;
+import alluxio.underfs.options.OpenOptions;
 
+import com.codahale.metrics.Counter;
 import com.google.common.base.Preconditions;
 
 import java.io.IOException;
 import java.io.InputStream;
 
 import javax.annotation.concurrent.NotThreadSafe;
+import javax.annotation.concurrent.ThreadSafe;
 
 /**
  * This class provides a streaming API to read a fixed chunk from a file in the under storage
@@ -29,7 +38,10 @@ import javax.annotation.concurrent.NotThreadSafe;
  * storage client.
  */
 @NotThreadSafe
-public final class UnderStoreBlockInStream extends BlockInStream {
+public final class UnderStoreBlockInStream extends BlockInStream implements PositionedReadable {
+  private static final boolean PACKET_STREAMING_ENABLED =
+      Configuration.getBoolean(PropertyKey.USER_PACKET_STREAMING_ENABLED);
+
   /**
    * The block size of the file. See {@link #getLength()} for more length information.
    */
@@ -50,16 +62,19 @@ public final class UnderStoreBlockInStream extends BlockInStream {
   private long mPos;
   /** The current under store stream. */
   private InputStream mUnderStoreStream;
+  private final FileSystemContext mContext;
 
   /**
    * A factory which can create an input stream to under storage.
    */
   public interface UnderStoreStreamFactory extends AutoCloseable {
     /**
+     * @param context file system context
+     * @param options for opening a UFS input stream
      * @return an input stream to under storage
      * @throws IOException if an IO exception occurs
      */
-    InputStream create() throws IOException;
+    InputStream create(FileSystemContext context, OpenOptions options) throws IOException;
 
     /**
      * Closes the factory, releasing any resources it was holding.
@@ -73,6 +88,7 @@ public final class UnderStoreBlockInStream extends BlockInStream {
    * Creates an under store block in stream which will read from the streams created by the given
    * {@link UnderStoreStreamFactory}. The stream will be set to the beginning of the block.
    *
+   * @param context the file system context
    * @param initPos the initial position
    * @param length the length of this current block (allowed to be {@link Constants#UNKNOWN_SIZE})
    * @param fileBlockSize the block size for the file
@@ -81,19 +97,24 @@ public final class UnderStoreBlockInStream extends BlockInStream {
    *
    * @throws IOException if an IO exception occurs while creating the under storage input stream
    */
-  public UnderStoreBlockInStream(long initPos, long length, long fileBlockSize,
-      UnderStoreStreamFactory underStoreStreamFactory) throws IOException {
+  public UnderStoreBlockInStream(FileSystemContext context, long initPos, long length,
+      long fileBlockSize, UnderStoreStreamFactory underStoreStreamFactory) throws IOException {
     mInitPos = initPos;
     mLength = length;
     mFileBlockSize = fileBlockSize;
     mUnderStoreStreamFactory = underStoreStreamFactory;
+    mContext = Preconditions.checkNotNull(context);
     setUnderStoreStream(0);
   }
 
   @Override
   public void close() throws IOException {
-    mUnderStoreStreamFactory.close();
+    // TODO(peis): Use Closer.
+    // The order of the two closes are important because mUnderStoreStream.close() might still
+    // use resources (e.g. output stream) opened on the server side which are closed by
+    // mUnderStoreStreamFactory.close().
     mUnderStoreStream.close();
+    mUnderStoreStreamFactory.close();
   }
 
   @Override
@@ -111,6 +132,7 @@ public final class UnderStoreBlockInStream extends BlockInStream {
       // Read a valid byte, update the position.
       mPos++;
     }
+    Metrics.BYTES_READ_UFS.inc();
     return data;
   }
 
@@ -134,7 +156,38 @@ public final class UnderStoreBlockInStream extends BlockInStream {
       // Read valid data, update the position.
       mPos += bytesRead;
     }
+    if (bytesRead > 0) {
+      Metrics.BYTES_READ_UFS.inc(bytesRead);
+    }
     return bytesRead;
+  }
+
+  @Override
+  public int positionedRead(long pos, byte[] b, int off, int len) throws IOException {
+    Preconditions.checkState(PACKET_STREAMING_ENABLED,
+        "PositionedReadable interface is implemented only if packet streaming is enabled.");
+
+    if (pos >= mLength) {
+      return -1;
+    }
+
+    if (mUnderStoreStream instanceof PositionedReadable) {
+      return ((PositionedReadable) mUnderStoreStream).positionedRead(pos, b, off, len);
+    }
+    if (mUnderStoreStream instanceof org.apache.hadoop.fs.PositionedReadable) {
+      return ((org.apache.hadoop.fs.PositionedReadable) mUnderStoreStream).read(pos, b, off, len);
+    }
+
+    // This happens only when UFS delegation is off and the UFS is not HDFS.
+    synchronized (this) {
+      long oldPos = mPos;
+      try {
+        seek(pos);
+        return mUnderStoreStream.read(b, off, len);
+      } finally {
+        seek(oldPos);
+      }
+    }
   }
 
   @Override
@@ -144,14 +197,11 @@ public final class UnderStoreBlockInStream extends BlockInStream {
 
   @Override
   public void seek(long pos) throws IOException {
-    if (pos < mPos) {
-      setUnderStoreStream(pos);
-    } else {
-      long toSkip = pos - mPos;
-      if (skip(toSkip) != toSkip) {
-        throw new IOException(ExceptionMessage.FAILED_SEEK.getMessage(pos));
-      }
-    }
+    Preconditions.checkArgument(pos >= 0, PreconditionMessage.ERR_SEEK_NEGATIVE.toString(), pos);
+    Preconditions.checkArgument(pos <= mLength,
+        PreconditionMessage.ERR_SEEK_PAST_END_OF_BLOCK.toString(), pos);
+    ((Seekable) mUnderStoreStream).seek(mInitPos + pos);
+    mPos = pos;
   }
 
   @Override
@@ -185,13 +235,9 @@ public final class UnderStoreBlockInStream extends BlockInStream {
     Preconditions.checkArgument(pos >= 0, PreconditionMessage.ERR_SEEK_NEGATIVE.toString(), pos);
     Preconditions.checkArgument(pos <= mLength,
         PreconditionMessage.ERR_SEEK_PAST_END_OF_BLOCK.toString(), pos);
-    mUnderStoreStream = mUnderStoreStreamFactory.create();
     long streamStart = mInitPos + pos;
-    // The stream is at the beginning of the file, so skip to the correct absolute position.
-    if (streamStart != 0 && streamStart != mUnderStoreStream.skip(streamStart)) {
-      mUnderStoreStream.close();
-      throw new IOException(ExceptionMessage.FAILED_SKIP.getMessage(pos));
-    }
+    mUnderStoreStream = mUnderStoreStreamFactory.create(mContext,
+        OpenOptions.defaults().setOffset(streamStart).setLength(mInitPos + mFileBlockSize));
     // Set the current block position to the specified block position.
     mPos = pos;
   }
@@ -210,5 +256,15 @@ public final class UnderStoreBlockInStream extends BlockInStream {
     }
     // The length is unknown. Use the max block size until the computed length is known.
     return mFileBlockSize;
+  }
+
+  /**
+   * Class that contains metrics about {@link UnderStoreBlockInStream}.
+   */
+  @ThreadSafe
+  private static final class Metrics {
+    private static final Counter BYTES_READ_UFS = MetricsSystem.clientCounter("BytesReadUfs");
+
+    private Metrics() {} // prevent instantiation
   }
 }

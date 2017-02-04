@@ -17,7 +17,7 @@ Alluxio-FUSE是一个新的处于实验阶段的特性，该特性允许在一�
 
 * Linux kernel 2.6.9及以上
 * JDK 1.8及以上
-* libfuse 2.9.3及以上
+* [libfuse](https://github.com/libfuse/libfuse) 2.9.3及以上
   (2.8.3也能够工作，但会提示一些警告)
 
 # 构建
@@ -54,7 +54,7 @@ Alluxio-FUSE是一个新的处于实验阶段的特性，该特性允许在一�
 
 Alluxio-FUSE是基于标准的alluxio-core-client进行操作的。你也许希望像使用其他应用的client一样，自定义该alluxio-core-client的行为。
 
-一种方法是编辑`$ALLUXIO_HOME/bin/alluxio-fuse.sh`配置文件，将特定的配置项添加到`ALLUXIO_JAVA_OPTS`变量中。
+一种方法是编辑`$ALLUXIO_HOME/integration/fuse/bin/alluxio-fuse.sh`配置文件，将特定的配置项添加到`ALLUXIO_JAVA_OPTS`变量中。
 
 # 操作前提和状态
 
@@ -112,7 +112,7 @@ Seek操作只支持用于读的文件，即在指定`O_RDONLY` flags方式下被
   <tr>
     <td>{{ item.parameter }}</td>
     <td>{{ item.defaultValue }}</td>
-    <td>{{ site.data.table.cn.Alluxio-FUSE-parameter.[item.parameter] }}</td>
+    <td>{{ site.data.table.cn.Alluxio-FUSE-parameter[item.parameter] }}</td>
   </tr>
 {% endfor %}
 </table>

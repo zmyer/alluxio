@@ -12,19 +12,22 @@
 package alluxio;
 
 import alluxio.exception.ExceptionMessage;
+import alluxio.exception.PreconditionMessage;
 import alluxio.network.ChannelType;
 import alluxio.util.ConfigurationUtils;
 import alluxio.util.FormatUtils;
-import alluxio.util.network.NetworkAddressUtils;
+import alluxio.util.OSUtils;
 
 import com.google.common.base.Preconditions;
 import com.google.common.base.Splitter;
 import com.google.common.base.Throwables;
 import com.google.common.collect.Lists;
+import com.sun.management.OperatingSystemMXBean;
 import io.netty.util.internal.chmv8.ConcurrentHashMapV8;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.lang.management.ManagementFactory;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -60,62 +63,29 @@ import javax.annotation.concurrent.NotThreadSafe;
 public final class Configuration {
   private static final Logger LOG = LoggerFactory.getLogger(Constants.LOGGER_TYPE);
 
-  /** File to set customized properties for Alluxio server (both master and worker) and client. */
-  private static final String SITE_PROPERTIES = "alluxio-site.properties";
-
   /** Regex string to find "${key}" for variable substitution. */
   private static final String REGEX_STRING = "(\\$\\{([^{}]*)\\})";
   /** Regex to find ${key} for variable substitution. */
   private static final Pattern CONF_REGEX = Pattern.compile(REGEX_STRING);
   /** Map of properties. */
-  private static final ConcurrentHashMapV8<String, String> PROPERTIES =
-      new ConcurrentHashMapV8<>();
+  private static final ConcurrentHashMapV8<String, String> PROPERTIES = new ConcurrentHashMapV8<>();
+
+  /** File to set customized properties for Alluxio server (both master and worker) and client. */
+  public static final String SITE_PROPERTIES = "alluxio-site.properties";
 
   static {
     defaultInit();
   }
 
   /**
-   * The default configuration.
+   * Initializes the default {@link Configuration}.
+   *
+   * The order of preference is (1) system properties, (2) properties in the specified file, (3)
+   * default property values.
    */
   public static void defaultInit() {
-    init(SITE_PROPERTIES);
-  }
-
-  /**
-   * Constructor a {@link Configuration} instance.
-   *
-   * @param sitePropertiesFile site-wide properties
-   */
-  private static void init(String sitePropertiesFile) {
     // Load default
-    Properties defaultProps = new Properties();
-    for (PropertyKey key : PropertyKey.values()) {
-      String value = key.getDefaultValue();
-      if (value != null) {
-        defaultProps.setProperty(key.toString(), value);
-      }
-    }
-    // Override runtime default
-    defaultProps.setProperty(PropertyKey.MASTER_HOSTNAME.toString(),
-        NetworkAddressUtils.getLocalHostName(250));
-    defaultProps.setProperty(PropertyKey.WORKER_NETWORK_NETTY_CHANNEL.toString(),
-        String.valueOf(ChannelType.defaultType()));
-    defaultProps.setProperty(PropertyKey.USER_NETWORK_NETTY_CHANNEL.toString(),
-        String.valueOf(ChannelType.defaultType()));
-
-    String confPaths;
-    // If site conf is overwritten in system properties, overwrite the default setting
-    if (System.getProperty(PropertyKey.SITE_CONF_DIR.toString()) != null) {
-      confPaths = System.getProperty(PropertyKey.SITE_CONF_DIR.toString());
-    } else {
-      confPaths = defaultProps.getProperty(PropertyKey.SITE_CONF_DIR.toString());
-    }
-    String[] confPathList = confPaths.split(",");
-
-    // Load site specific properties file
-    Properties siteProps = ConfigurationUtils
-        .searchPropertiesFile(sitePropertiesFile, confPathList);
+    Properties defaultProps = createDefaultProps();
 
     // Load system properties
     Properties systemProps = new Properties();
@@ -124,34 +94,74 @@ public final class Configuration {
     // Now lets combine, order matters here
     PROPERTIES.clear();
     merge(defaultProps);
-    if (siteProps != null) {
-      merge(siteProps);
-    }
     merge(systemProps);
 
-    String masterHostname = get(PropertyKey.MASTER_HOSTNAME);
-    String masterPort = get(PropertyKey.MASTER_RPC_PORT);
-    boolean useZk = Boolean.parseBoolean(get(PropertyKey.ZOOKEEPER_ENABLED));
-    String masterAddress =
-        (useZk ? Constants.HEADER_FT : Constants.HEADER) + masterHostname + ":" + masterPort;
-    set(PropertyKey.MASTER_ADDRESS, masterAddress);
-    checkUserFileBufferBytes();
-
-    // Make sure the user hasn't set worker ports when there may be multiple workers per host
-    int maxWorkersPerHost = getInt(PropertyKey.INTEGRATION_YARN_WORKERS_PER_HOST_MAX);
-    if (maxWorkersPerHost > 1) {
-      String message = "%s cannot be specified when allowing multiple workers per host with "
-          + PropertyKey.INTEGRATION_YARN_WORKERS_PER_HOST_MAX.toString() + "=" + maxWorkersPerHost;
-      Preconditions.checkState(System.getProperty(PropertyKey.WORKER_DATA_PORT.toString()) == null,
-          String.format(message, PropertyKey.WORKER_DATA_PORT));
-      Preconditions.checkState(System.getProperty(PropertyKey.WORKER_RPC_PORT.toString()) == null,
-          String.format(message, PropertyKey.WORKER_RPC_PORT));
-      Preconditions.checkState(System.getProperty(PropertyKey.WORKER_WEB_PORT.toString()) == null,
-          String.format(message, PropertyKey.WORKER_WEB_PORT));
-      set(PropertyKey.WORKER_DATA_PORT, "0");
-      set(PropertyKey.WORKER_RPC_PORT, "0");
-      set(PropertyKey.WORKER_WEB_PORT, "0");
+    // Load site specific properties file if not in test mode. Note that we decide whether in test
+    // mode by default properties and system properties (via getBoolean). If it is not in test mode
+    // the PROPERTIES will be updated again.
+    if (!getBoolean(PropertyKey.TEST_MODE)) {
+      String confPaths = get(PropertyKey.SITE_CONF_DIR);
+      String[] confPathList = confPaths.split(",");
+      Properties siteProps = ConfigurationUtils.searchPropertiesFile(SITE_PROPERTIES, confPathList);
+      // Update site properties and system properties in order
+      if (siteProps != null) {
+        merge(siteProps);
+        merge(systemProps);
+      }
     }
+
+    // TODO(andrew): get rid of the MASTER_ADDRESS property key
+    if (containsKey(PropertyKey.MASTER_HOSTNAME)) {
+      String masterHostname = get(PropertyKey.MASTER_HOSTNAME);
+      String masterPort = get(PropertyKey.MASTER_RPC_PORT);
+      boolean useZk = Boolean.parseBoolean(get(PropertyKey.ZOOKEEPER_ENABLED));
+      String masterAddress =
+          (useZk ? Constants.HEADER_FT : Constants.HEADER) + masterHostname + ":" + masterPort;
+      set(PropertyKey.MASTER_ADDRESS, masterAddress);
+    }
+
+    Preconditions.checkState(validate());
+    checkConfigurationValues();
+  }
+
+  /**
+   * @return default properties
+   */
+  private static Properties createDefaultProps() {
+    Properties defaultProps = new Properties();
+    // Load compile-time default
+    for (PropertyKey key : PropertyKey.values()) {
+      String value = key.getDefaultValue();
+      if (value != null) {
+        defaultProps.setProperty(key.toString(), value);
+      }
+    }
+
+    // Load run-time default
+    defaultProps.setProperty(PropertyKey.WORKER_NETWORK_NETTY_CHANNEL.toString(),
+        String.valueOf(ChannelType.defaultType()));
+    defaultProps.setProperty(PropertyKey.USER_NETWORK_NETTY_CHANNEL.toString(),
+        String.valueOf(ChannelType.defaultType()));
+    // Set ramdisk volume according to OS type
+    if (OSUtils.isLinux()) {
+      defaultProps
+          .setProperty(PropertyKey.WORKER_TIERED_STORE_LEVEL0_DIRS_PATH.toString(), "/mnt/ramdisk");
+    } else if (OSUtils.isMacOS()) {
+      defaultProps.setProperty(PropertyKey.WORKER_TIERED_STORE_LEVEL0_DIRS_PATH.toString(),
+          "/Volumes/ramdisk");
+    }
+    // Set a reasonable default size for worker memory
+    try {
+      OperatingSystemMXBean operatingSystemMXBean =
+          (OperatingSystemMXBean) ManagementFactory.getOperatingSystemMXBean();
+      long memSize = operatingSystemMXBean.getTotalPhysicalMemorySize();
+      defaultProps
+          .setProperty(PropertyKey.WORKER_MEMORY_SIZE.toString(), String.valueOf(memSize * 2 / 3));
+    } catch (Exception e) {
+      // The package com.sun.management may not be available on every platform.
+      // fallback to the compile-time default value
+    }
+    return defaultProps;
   }
 
   /**
@@ -184,11 +194,21 @@ public final class Configuration {
    * @param key the key to set
    * @param value the value for the key
    */
-  public static void set(PropertyKey key, String value) {
+  public static void set(PropertyKey key, Object value) {
     Preconditions.checkArgument(key != null && value != null,
         String.format("the key value pair (%s, %s) cannot have null", key, value));
-    PROPERTIES.put(key.toString(), value);
+    PROPERTIES.put(key.toString(), value.toString());
     checkUserFileBufferBytes();
+  }
+
+  /**
+   * Unsets the value for the appropriate key in the {@link Properties}.
+   *
+   * @param key the key to unset
+   */
+  public static void unset(PropertyKey key) {
+    Preconditions.checkNotNull(key);
+    PROPERTIES.remove(key.toString());
   }
 
   /**
@@ -417,6 +437,26 @@ public final class Configuration {
   }
 
   /**
+   * Checks that the user hasn't set worker ports when there may be multiple workers per host.
+   */
+  private static void checkWorkerPorts() {
+    int maxWorkersPerHost = getInt(PropertyKey.INTEGRATION_YARN_WORKERS_PER_HOST_MAX);
+    if (maxWorkersPerHost > 1) {
+      String message = "%s cannot be specified when allowing multiple workers per host with "
+          + PropertyKey.INTEGRATION_YARN_WORKERS_PER_HOST_MAX.toString() + "=" + maxWorkersPerHost;
+      Preconditions.checkState(System.getProperty(PropertyKey.WORKER_DATA_PORT.toString()) == null,
+          String.format(message, PropertyKey.WORKER_DATA_PORT));
+      Preconditions.checkState(System.getProperty(PropertyKey.WORKER_RPC_PORT.toString()) == null,
+          String.format(message, PropertyKey.WORKER_RPC_PORT));
+      Preconditions.checkState(System.getProperty(PropertyKey.WORKER_WEB_PORT.toString()) == null,
+          String.format(message, PropertyKey.WORKER_WEB_PORT));
+      set(PropertyKey.WORKER_DATA_PORT, "0");
+      set(PropertyKey.WORKER_RPC_PORT, "0");
+      set(PropertyKey.WORKER_WEB_PORT, "0");
+    }
+  }
+
+  /**
    * {@link PropertyKey#USER_FILE_BUFFER_BYTES} should not bigger than {@link Integer#MAX_VALUE}
    * bytes.
    *
@@ -428,7 +468,47 @@ public final class Configuration {
     }
     long usrFileBufferBytes = getBytes(PropertyKey.USER_FILE_BUFFER_BYTES);
     Preconditions.checkArgument((usrFileBufferBytes & Integer.MAX_VALUE) == usrFileBufferBytes,
-        "Invalid \"" + PropertyKey.USER_FILE_BUFFER_BYTES + "\": " + usrFileBufferBytes);
+        PreconditionMessage.INVALID_USER_FILE_BUFFER_BYTES.toString(), usrFileBufferBytes);
+  }
+
+  /**
+   * Validates Zookeeper-related configuration and prints warnings for possible sources of error.
+   */
+  private static void checkZkConfiguration() {
+    if (getBoolean(PropertyKey.ZOOKEEPER_ENABLED)) {
+      Preconditions.checkState(containsKey(PropertyKey.ZOOKEEPER_ADDRESS),
+          PreconditionMessage.ERR_ZK_ADDRESS_NOT_SET.toString(),
+          PropertyKey.ZOOKEEPER_ADDRESS.toString());
+    } else if (containsKey(PropertyKey.ZOOKEEPER_ADDRESS)) {
+      LOG.warn("{} is configured, but {} is set to false", PropertyKey.ZOOKEEPER_ADDRESS.toString(),
+          PropertyKey.ZOOKEEPER_ENABLED.toString());
+    }
+  }
+
+  /**
+   * Checks that the configuration values are reasonable.
+   */
+  private static void checkConfigurationValues() {
+    checkWorkerPorts();
+    checkUserFileBufferBytes();
+    checkZkConfiguration();
+  }
+
+  /**
+   * Validates the configurations.
+   *
+   * @return true if the validation succeeds, false otherwise
+   */
+  public static boolean validate() {
+    boolean valid = true;
+    for (Map.Entry<String, String> entry : toMap().entrySet()) {
+      String propertyName = entry.getKey();
+      if (!PropertyKey.isValid(propertyName)) {
+        LOG.error("Unsupported property " + propertyName);
+        valid = false;
+      }
+    }
+    return valid;
   }
 
   private Configuration() {} // prevent instantiation

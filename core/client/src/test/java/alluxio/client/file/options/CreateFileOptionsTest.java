@@ -18,7 +18,9 @@ import alluxio.PropertyKey;
 import alluxio.client.WriteType;
 import alluxio.client.file.policy.FileWriteLocationPolicy;
 import alluxio.client.file.policy.RoundRobinPolicy;
+import alluxio.security.authorization.Mode;
 import alluxio.thrift.CreateFileTOptions;
+import alluxio.wire.TtlAction;
 
 import org.junit.Assert;
 import org.junit.Test;
@@ -31,6 +33,8 @@ import java.util.Random;
 public class CreateFileOptionsTest {
   private final long mDefaultBlockSizeBytes = Configuration.getBytes(
       PropertyKey.USER_BLOCK_SIZE_BYTES_DEFAULT);
+  private final int mDefaultWriteTier =
+      Configuration.getInt(PropertyKey.USER_FILE_WRITE_TIER_DEFAULT);
   private final WriteType mDefaultWriteType = Configuration.getEnum(
       PropertyKey.USER_FILE_WRITE_TYPE_DEFAULT, alluxio.client.WriteType.class);
 
@@ -40,9 +44,11 @@ public class CreateFileOptionsTest {
     CreateFileOptions options = CreateFileOptions.defaults();
     Assert.assertTrue(options.isRecursive());
     Assert.assertEquals(mDefaultBlockSizeBytes, options.getBlockSizeBytes());
-    Assert.assertEquals(mDefaultWriteType.getAlluxioStorageType(), options.getAlluxioStorageType());
-    Assert.assertEquals(mDefaultWriteType.getUnderStorageType(), options.getUnderStorageType());
     Assert.assertEquals(Constants.NO_TTL, options.getTtl());
+    Assert.assertEquals(TtlAction.DELETE, options.getTtlAction());
+    Assert.assertEquals(mDefaultWriteTier, options.getWriteTier());
+    Assert.assertEquals(mDefaultWriteType, options.getWriteType());
+    Assert.assertEquals(Mode.defaults().applyFileUMask(), options.getMode());
   }
 
   /**
@@ -53,23 +59,30 @@ public class CreateFileOptionsTest {
     Random random = new Random();
     long blockSize = random.nextLong();
     FileWriteLocationPolicy policy = new RoundRobinPolicy();
+    Mode mode = new Mode((short) random.nextInt());
     boolean recursive = random.nextBoolean();
     long ttl = random.nextLong();
+    int writeTier = random.nextInt();
     WriteType writeType = WriteType.NONE;
 
     CreateFileOptions options = CreateFileOptions.defaults();
     options.setBlockSizeBytes(blockSize);
     options.setLocationPolicy(policy);
+    options.setMode(mode);
     options.setRecursive(recursive);
     options.setTtl(ttl);
+    options.setTtlAction(TtlAction.FREE);
+    options.setWriteTier(writeTier);
     options.setWriteType(writeType);
 
     Assert.assertEquals(blockSize, options.getBlockSizeBytes());
     Assert.assertEquals(policy, options.getLocationPolicy());
+    Assert.assertEquals(mode, options.getMode());
     Assert.assertEquals(recursive, options.isRecursive());
     Assert.assertEquals(ttl, options.getTtl());
-    Assert.assertEquals(writeType.getAlluxioStorageType(), options.getAlluxioStorageType());
-    Assert.assertEquals(writeType.getUnderStorageType(), options.getUnderStorageType());
+    Assert.assertEquals(TtlAction.FREE, options.getTtlAction());
+    Assert.assertEquals(writeTier, options.getWriteTier());
+    Assert.assertEquals(writeType, options.getWriteType());
   }
 
   /**
@@ -77,14 +90,32 @@ public class CreateFileOptionsTest {
    */
   @Test
   public void toThrift() {
+    Random random = new Random();
+    long blockSize = random.nextLong();
+    FileWriteLocationPolicy policy = new RoundRobinPolicy();
+    Mode mode = new Mode((short) random.nextInt());
+    boolean recursive = random.nextBoolean();
+    long ttl = random.nextLong();
+    int writeTier = random.nextInt();
+    WriteType writeType = WriteType.NONE;
+
     CreateFileOptions options = CreateFileOptions.defaults();
+    options.setBlockSizeBytes(blockSize);
+    options.setLocationPolicy(policy);
+    options.setMode(mode);
+    options.setRecursive(recursive);
+    options.setTtl(ttl);
+    options.setTtlAction(TtlAction.FREE);
+    options.setWriteTier(writeTier);
+    options.setWriteType(writeType);
+
     CreateFileTOptions thriftOptions = options.toThrift();
-    Assert.assertTrue(thriftOptions.isRecursive());
-    Assert.assertTrue(thriftOptions.isSetPersisted());
-    Assert.assertEquals(mDefaultWriteType.getUnderStorageType().isSyncPersist(), thriftOptions
-        .isPersisted());
-    Assert.assertEquals(mDefaultBlockSizeBytes, thriftOptions.getBlockSizeBytes());
-    Assert.assertEquals(Constants.NO_TTL, thriftOptions.getTtl());
+    Assert.assertEquals(blockSize, thriftOptions.getBlockSizeBytes());
+    Assert.assertEquals(recursive, thriftOptions.isRecursive());
+    Assert.assertEquals(writeType.isThrough(), thriftOptions.isPersisted());
+    Assert.assertEquals(ttl, thriftOptions.getTtl());
+    Assert.assertEquals(alluxio.thrift.TTtlAction.Free, thriftOptions.getTtlAction());
+    Assert.assertEquals(mode.toShort(), thriftOptions.getMode());
   }
 
   @Test

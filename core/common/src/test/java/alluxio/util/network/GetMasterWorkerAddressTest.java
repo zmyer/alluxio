@@ -13,7 +13,6 @@ package alluxio.util.network;
 
 import alluxio.Configuration;
 import alluxio.ConfigurationTestUtils;
-import alluxio.Constants;
 import alluxio.PropertyKey;
 import alluxio.util.network.NetworkAddressUtils.ServiceType;
 
@@ -44,7 +43,7 @@ public class GetMasterWorkerAddressTest {
     Configuration.set(PropertyKey.MASTER_HOSTNAME, "RemoteMaster1");
     Configuration.set(PropertyKey.MASTER_RPC_PORT, "10000");
     String defaultHostname = NetworkAddressUtils.getLocalHostName();
-    int defaultPort = Constants.DEFAULT_MASTER_PORT;
+    int defaultPort = Integer.parseInt(PropertyKey.MASTER_RPC_PORT.getDefaultValue());
     InetSocketAddress masterAddress =
         NetworkAddressUtils.getConnectAddress(ServiceType.MASTER_RPC);
     Assert.assertEquals(new InetSocketAddress("RemoteMaster1", 10000), masterAddress);
@@ -65,25 +64,5 @@ public class GetMasterWorkerAddressTest {
     // all default
     masterAddress = NetworkAddressUtils.getConnectAddress(ServiceType.MASTER_RPC);
     Assert.assertEquals(new InetSocketAddress(defaultHostname, defaultPort), masterAddress);
-  }
-
-  /**
-   * Tests the {@link NetworkAddressUtils#getConnectAddress(ServiceType)} method for
-   * a worker node.
-   */
-  @Test
-  public void getWorkerAddress() {
-    // port only
-    Configuration.set(PropertyKey.WORKER_RPC_PORT, "10001");
-    String defaultHostname = NetworkAddressUtils.getLocalHostName();
-    int defaultPort = Constants.DEFAULT_WORKER_PORT;
-    InetSocketAddress workerAddress =
-        NetworkAddressUtils.getConnectAddress(ServiceType.WORKER_RPC);
-    Assert.assertEquals(new InetSocketAddress(defaultHostname, 10001), workerAddress);
-    ConfigurationTestUtils.resetConfiguration();
-
-    // all default
-    workerAddress = NetworkAddressUtils.getConnectAddress(ServiceType.WORKER_RPC);
-    Assert.assertEquals(new InetSocketAddress(defaultHostname, defaultPort), workerAddress);
   }
 }

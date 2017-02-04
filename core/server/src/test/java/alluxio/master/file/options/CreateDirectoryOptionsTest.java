@@ -15,22 +15,19 @@ import alluxio.CommonTestUtils;
 import alluxio.Configuration;
 import alluxio.ConfigurationTestUtils;
 import alluxio.PropertyKey;
-import alluxio.security.authorization.Permission;
+import alluxio.Constants;
+import alluxio.security.authorization.Mode;
+import alluxio.util.CommonUtils;
+import alluxio.wire.TtlAction;
 
 import org.junit.Assert;
 import org.junit.Test;
-import org.junit.runner.RunWith;
-import org.powermock.core.classloader.annotations.PrepareForTest;
-import org.powermock.modules.junit4.PowerMockRunner;
 
 import java.util.Random;
 
 /**
  * Unit tests for {@link CreateDirectoryOptions}.
  */
-@RunWith(PowerMockRunner.class)
-// Need to mock Permission to use CommonTestUtils#testEquals.
-@PrepareForTest(Permission.class)
 public class CreateDirectoryOptionsTest {
   /**
    * Tests the {@link CreateDirectoryOptions#defaults()} method.
@@ -42,8 +39,13 @@ public class CreateDirectoryOptionsTest {
     CreateDirectoryOptions options = CreateDirectoryOptions.defaults();
 
     Assert.assertEquals(false, options.isAllowExists());
+    Assert.assertEquals("", options.getOwner());
+    Assert.assertEquals("", options.getGroup());
+    Assert.assertEquals(Mode.defaults().applyDirectoryUMask(), options.getMode());
     Assert.assertFalse(options.isPersisted());
     Assert.assertFalse(options.isRecursive());
+    Assert.assertEquals(Constants.NO_TTL, options.getTtl());
+    Assert.assertEquals(TtlAction.DELETE, options.getTtlAction());
     ConfigurationTestUtils.resetConfiguration();
   }
 
@@ -56,28 +58,40 @@ public class CreateDirectoryOptionsTest {
     boolean allowExists = random.nextBoolean();
     boolean mountPoint = random.nextBoolean();
     long operationTimeMs = random.nextLong();
-    Permission permission = Permission.defaults();
+    String owner = CommonUtils.randomAlphaNumString(10);
+    String group = CommonUtils.randomAlphaNumString(10);
+    Mode mode = new Mode((short) random.nextInt());
+
     boolean persisted = random.nextBoolean();
     boolean recursive = random.nextBoolean();
+    long ttl = random.nextLong();
 
     CreateDirectoryOptions options = CreateDirectoryOptions.defaults()
         .setAllowExists(allowExists)
         .setMountPoint(mountPoint)
         .setOperationTimeMs(operationTimeMs)
         .setPersisted(persisted)
-        .setPermission(permission)
-        .setRecursive(recursive);
+        .setOwner(owner)
+        .setGroup(group)
+        .setMode(mode)
+        .setRecursive(recursive)
+        .setTtl(ttl)
+        .setTtlAction(TtlAction.FREE);
 
     Assert.assertEquals(allowExists, options.isAllowExists());
     Assert.assertEquals(mountPoint, options.isMountPoint());
     Assert.assertEquals(operationTimeMs, options.getOperationTimeMs());
-    Assert.assertEquals(permission, options.getPermission());
     Assert.assertEquals(persisted, options.isPersisted());
+    Assert.assertEquals(owner, options.getOwner());
+    Assert.assertEquals(group, options.getGroup());
+    Assert.assertEquals(mode, options.getMode());
     Assert.assertEquals(recursive, options.isRecursive());
+    Assert.assertEquals(ttl, options.getTtl());
+    Assert.assertEquals(TtlAction.FREE, options.getTtlAction());
   }
 
   @Test
   public void equalsTest() throws Exception {
-    CommonTestUtils.testEquals(CreateDirectoryOptions.class, "mOperationTimeMs");
+    CommonTestUtils.testEquals(CreateDirectoryOptions.class);
   }
 }

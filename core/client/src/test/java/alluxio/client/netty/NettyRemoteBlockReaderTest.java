@@ -11,6 +11,7 @@
 
 package alluxio.client.netty;
 
+import alluxio.client.file.FileSystemContext;
 import alluxio.network.protocol.RPCBlockReadResponse;
 import alluxio.network.protocol.RPCErrorResponse;
 import alluxio.network.protocol.RPCFileWriteResponse;
@@ -21,12 +22,18 @@ import alluxio.network.protocol.databuffer.DataByteBuffer;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
+import io.netty.channel.ChannelPipeline;
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.mockito.BDDMockito;
 import org.mockito.Mockito;
 import org.mockito.invocation.InvocationOnMock;
 import org.mockito.stubbing.Answer;
+import org.powermock.api.mockito.PowerMockito;
+import org.powermock.core.classloader.annotations.PrepareForTest;
+import org.powermock.modules.junit4.PowerMockRunner;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
@@ -36,13 +43,17 @@ import java.nio.ByteBuffer;
 /**
  * Tests for the {@link NettyRemoteBlockReader} class.
  */
+@RunWith(PowerMockRunner.class)
+@PrepareForTest({FileSystemContext.class, NettyClient.class})
 public class NettyRemoteBlockReaderTest {
 
+  private FileSystemContext mContext;
   private NettyRemoteBlockReader mNettyRemoteBlockReader;
-  private Bootstrap mBootstrap;
-  private ClientHandler mClientHandler;
+  private static Bootstrap sBootstrap = Mockito.mock(Bootstrap.class);
+  private static ClientHandler sClientHandler = new ClientHandler();
   private Channel mChannel;
   private ChannelFuture mChannelFuture;
+  private ChannelPipeline mChannelPipeline;
 
   private static final InetSocketAddress INET_SOCKET_ADDRESS = new InetSocketAddress(1234);
   private static final long BLOCK_ID = 4242L;
@@ -55,18 +66,29 @@ public class NettyRemoteBlockReaderTest {
    * Set up.
    */
   @Before
-  public void before() throws InterruptedException {
-    mBootstrap = Mockito.mock(Bootstrap.class);
-    mClientHandler = new ClientHandler();
-    mNettyRemoteBlockReader = new NettyRemoteBlockReader(mBootstrap, mClientHandler);
-
+  public void before() throws Exception {
+    PowerMockito.mockStatic(NettyClient.class);
+    BDDMockito.given(NettyClient.createClientBootstrap()).willReturn(sBootstrap);
+    mContext = PowerMockito.mock(FileSystemContext.class);
+    mNettyRemoteBlockReader = new NettyRemoteBlockReader(mContext);
     mChannel = Mockito.mock(Channel.class);
+    Mockito.when(mContext.acquireNettyChannel(Mockito.any(InetSocketAddress.class)))
+        .thenReturn(mChannel);
     mChannelFuture = Mockito.mock(ChannelFuture.class);
+    mChannelPipeline = Mockito.mock(ChannelPipeline.class);
 
     Mockito.when(mChannel.close()).thenReturn(mChannelFuture);
     Mockito.when(mChannelFuture.sync()).thenReturn(mChannelFuture);
     Mockito.when(mChannelFuture.channel()).thenReturn(mChannel);
-    Mockito.when(mBootstrap.connect(Mockito.any(SocketAddress.class))).thenReturn(mChannelFuture);
+    Mockito.when(mChannelFuture.isDone()).thenReturn(true);
+    Mockito.when(mChannelFuture.isSuccess()).thenReturn(true);
+    Mockito.when(sBootstrap.connect(Mockito.any(SocketAddress.class))).thenReturn(mChannelFuture);
+    Mockito.when(sBootstrap.connect()).thenReturn(mChannelFuture);
+    Mockito.when(sBootstrap.clone()).thenReturn(sBootstrap);
+    Mockito.when(sBootstrap.remoteAddress(Mockito.any(InetSocketAddress.class)))
+        .thenReturn(sBootstrap);
+    Mockito.when(mChannel.pipeline()).thenReturn(mChannelPipeline);
+    Mockito.when(mChannelPipeline.last()).thenReturn(sClientHandler);
   }
 
   /**
@@ -77,8 +99,8 @@ public class NettyRemoteBlockReaderTest {
     Mockito.when(mChannel.writeAndFlush(Mockito.any())).then(new Answer<ChannelFuture>() {
       @Override
       public ChannelFuture answer(InvocationOnMock invocation) throws Throwable {
-        mClientHandler.channelRead0(null, createRPCBlockReadResponse(RPCResponse.Status.SUCCESS));
-        return null;
+        sClientHandler.channelRead0(null, createRPCBlockReadResponse(RPCResponse.Status.SUCCESS));
+        return mChannelFuture;
       }
     });
 
@@ -100,9 +122,9 @@ public class NettyRemoteBlockReaderTest {
     Mockito.when(mChannel.writeAndFlush(Mockito.any())).then(new Answer<ChannelFuture>() {
       @Override
       public ChannelFuture answer(InvocationOnMock invocation) throws Throwable {
-        mClientHandler.channelRead0(null,
+        sClientHandler.channelRead0(null,
                 createRPCBlockReadResponse(RPCResponse.Status.UFS_READ_FAILED));
-        return null;
+        return mChannelFuture;
       }
     });
 
@@ -118,8 +140,8 @@ public class NettyRemoteBlockReaderTest {
     Mockito.when(mChannel.writeAndFlush(Mockito.any())).then(new Answer<ChannelFuture>() {
       @Override
       public ChannelFuture answer(InvocationOnMock invocation) throws Throwable {
-        mClientHandler.channelRead0(null, new RPCErrorResponse(RPCResponse.Status.SUCCESS));
-        return null;
+        sClientHandler.channelRead0(null, new RPCErrorResponse(RPCResponse.Status.SUCCESS));
+        return mChannelFuture;
       }
     });
 
@@ -135,9 +157,9 @@ public class NettyRemoteBlockReaderTest {
     Mockito.when(mChannel.writeAndFlush(Mockito.any())).then(new Answer<ChannelFuture>() {
       @Override
       public ChannelFuture answer(InvocationOnMock invocation) throws Throwable {
-        mClientHandler.channelRead0(null,
+        sClientHandler.channelRead0(null,
                 new RPCFileWriteResponse(9876, 0, 20, RPCResponse.Status.SUCCESS));
-        return null;
+        return mChannelFuture;
       }
     });
 

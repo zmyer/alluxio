@@ -18,6 +18,7 @@ function printUsage {
   echo -e "  formatWorker  \t Format Alluxio worker storage"
   echo -e "  bootstrapConf \t Generate a config file if one doesn't exist"
   echo -e "  fs            \t Command line input for generic filesystem user client."
+  echo -e "  getConf [key] \t Look up a configuration key, or print all configuration."
   echo -e "  loadufs       \t Load existing files in underlayer filesystem into Alluxio."
   echo -e "  runClass      \t Run an Alluxio class with main method."
   echo -e "  runTest       \t Run an end-to-end test on an Alluxio cluster."
@@ -25,6 +26,8 @@ function printUsage {
   echo -e "  runTests      \t Run all end-to-end tests on an Alluxio cluster."
   echo -e "  runJournalCrashTest\t Test the Master Journal System in a crash scenario. Try 'alluxio runJournalCrashTest -help' for more help."
   echo -e "                \t NOTE: This command will stop the existing server and creates a new one!"
+  echo -e "  runMesosTest  \t Test the Alluxio integration with Mesos. Try 'alluxio mesosTest -help' for more help."
+  echo -e "                \t NOTE: This command requires Mesos to be running and will stop any Alluxio servers that are currently running."
   echo -e "  readJournal   \t Read an Alluxio journal file from stdin and write a human-readable version of it to stdout."
   echo -e "  killAll <WORD>\t Kill processes containing the WORD."
   echo -e "  copyDir <PATH>\t Copy the PATH to all worker nodes."
@@ -42,13 +45,12 @@ function printUsage {
 }
 
 function bootstrapConf {
-  local usage="Usage: $0 bootstrapConf <alluxio_master_hostname> [local|hdfs|s3|gcs|glusterfs|swift|oss]"
+  local usage="Usage: $0 bootstrapConf <alluxio_master_hostname>"
   if [[ $# -lt 1 ]]; then
     echo ${usage} >&2
     exit 1
   fi
   local master=${1}
-  local ufs=${2:-local}
 
   ALLUXIO_CONF_DIR="${BIN}/../conf"
   local dst="${ALLUXIO_CONF_DIR}/alluxio-env.sh"
@@ -80,41 +82,6 @@ function bootstrapConf {
   # Set the ramdisk folder
   ALLUXIO_RAM_FOLDER="${RAMDISK_FOLDER}"
 
-  # Set under storage specific configuration
-  case ${ufs} in
-    local)
-      ALLUXIO_UNDERFS_ADDRESS="\${ALLUXIO_HOME}/underFSStorage/"
-      ;;
-    hdfs)
-      ALLUXIO_UNDERFS_ADDRESS="hdfs://localhost:9000/alluxio/"
-      ;;
-    s3)
-      ALLUXIO_UNDERFS_ADDRESS="s3a://bucket/directory/"
-      ;;
-    s3a)
-      ALLUXIO_UNDERFS_ADDRESS="s3a://bucket/directory/"
-      ;;
-    s3n)
-      ALLUXIO_UNDERFS_ADDRESS="s3n://bucket/directory/"
-      ;;
-    gcs)
-      ALLUXIO_UNDERFS_ADDRESS="gs://bucket/directory/"
-      ;;
-    glusterfs)
-      ALLUXIO_UNDERFS_ADDRESS="/gluster_vol/"
-      ;;
-    swift)
-      ALLUXIO_UNDERFS_ADDRESS="swift://swift-container/"
-      ;;
-    oss)
-      ALLUXIO_UNDERFS_ADDRESS="oss://bucket/directory/"
-      ;;
-    *)
-      echo ${usage} >&2
-      exit 1
-      ;;
-  esac
-
   cat > ${dst} <<EOF
 #!/usr/bin/env bash
 #
@@ -134,7 +101,6 @@ function bootstrapConf {
 ALLUXIO_MASTER_HOSTNAME=\${ALLUXIO_MASTER_HOSTNAME:-"${ALLUXIO_MASTER_HOSTNAME}"}
 ALLUXIO_WORKER_MEMORY_SIZE=\${ALLUXIO_WORKER_MEMORY_SIZE:-"${ALLUXIO_WORKER_MEMORY_SIZE}"}
 ALLUXIO_RAM_FOLDER=\${ALLUXIO_RAM_FOLDER:-"${ALLUXIO_RAM_FOLDER}"}
-ALLUXIO_UNDERFS_ADDRESS=\${ALLUXIO_UNDERFS_ADDRESS:-"${ALLUXIO_UNDERFS_ADDRESS}"}
 EOF
 
   echo "${dst} is created."
@@ -148,13 +114,13 @@ function killAll {
 
   keyword=$1
   count=0
-  for pid in `ps -Aww -o pid,command | grep -i "[j]ava" | grep ${keyword} | awk '{print $1}'`; do
+  for pid in $(ps -Aww -o pid,command | grep -i "[j]ava" | grep ${keyword} | awk '{print $1}'); do
     kill -15 ${pid} > /dev/null 2>&1
     local cnt=30
     while kill -0 ${pid} > /dev/null 2>&1; do
       if [[ ${cnt} -gt 1 ]]; then
         # still not dead, wait
-        cnt=`expr ${cnt} - 1`
+        cnt=$(expr ${cnt} - 1)
         sleep 1
       else
         # waited long enough, kill the process
@@ -162,9 +128,9 @@ function killAll {
         kill -9 ${pid} 2> /dev/null
       fi
     done
-    count=`expr ${count} + 1`
+    count=$(expr ${count} + 1)
   done
-  echo "Killed ${count} processes on `hostname`"
+  echo "Killed ${count} processes on $(hostname)"
 }
 
 function copyDir {
@@ -173,11 +139,11 @@ function copyDir {
     exit 1
   fi
 
-  WORKERS=`cat ${ALLUXIO_CONF_DIR}/workers | grep -v '^#'`
+  WORKERS=$(cat ${ALLUXIO_CONF_DIR}/workers | grep -v '^#')
 
-  DIR=`readlink -f "$1"`
-  DIR=`echo ${DIR}|sed 's@/$@@'`
-  DEST=`dirname ${DIR}`
+  DIR=$(readlink -f "$1")
+  DIR=$(echo ${DIR}|sed 's@/$@@')
+  DEST=$(dirname ${DIR})
 
   SSH_OPTS="-o StrictHostKeyChecking=no -o ConnectTimeout=5"
 
@@ -190,21 +156,15 @@ function copyDir {
 }
 
 function runJavaClass {
-  while getopts ":D:" opt; do
-    case ${opt} in
-    D)
-      ALLUXIO_SHELL_JAVA_OPTS+=" -D${OPTARG}"
-      ;;
-    \?)
-      echo "Invalid option: -${OPTARG}" >&2
-      printUsage
-      exit 1
-      ;;
-    esac
+  CLASS_ARGS=""
+  for arg in "$@"; do
+      shift
+      case "${arg}" in
+          -D*) ALLUXIO_SHELL_JAVA_OPTS+=" ${arg}" ;;
+          *) CLASS_ARGS+=" ${arg}"
+      esac
   done
-  shift $((${OPTIND} - 1))
-
-  ${JAVA} -cp ${CLASSPATH} ${ALLUXIO_USER_JAVA_OPTS} ${ALLUXIO_SHELL_JAVA_OPTS} ${CLASS} ${PARAMETER} $@
+  ${JAVA} -cp ${CLASSPATH} ${ALLUXIO_USER_JAVA_OPTS} ${ALLUXIO_SHELL_JAVA_OPTS} ${CLASS} ${PARAMETER} ${CLASS_ARGS}
 }
 
 function main {
@@ -267,19 +227,24 @@ function main {
 
     ${LAUNCHER} ${BIN}/alluxio-workers.sh ${BIN}/alluxio formatWorker
 
-    echo "Formatting Alluxio Master @ ${ALLUXIO_MASTER_HOSTNAME}"
+    echo "Formatting Alluxio Master @ $(hostname -f)"
     CLASS="alluxio.cli.Format"
     PARAMETER="master"
+    ALLUXIO_SHELL_JAVA_OPTS+=" -Dalluxio.logger.type=Console"
     runJavaClass "$@"
   ;;
   "formatWorker")
-    echo "Formatting Alluxio Worker @ `hostname -f`"
+    echo "Formatting Alluxio Worker @ $(hostname -f)"
     CLASS="alluxio.cli.Format"
     PARAMETER="worker"
     runJavaClass "$@"
   ;;
   "fs")
     CLASS="alluxio.cli.AlluxioShell"
+    runJavaClass "$@"
+  ;;
+  "getConf")
+    CLASS="alluxio.cli.GetConf"
     runJavaClass "$@"
   ;;
   "loadufs")
@@ -294,7 +259,12 @@ function main {
   ;;
   "runTest")
     CLASS="alluxio.cli.TestRunner"
-    PARAMETER="alluxio://${ALLUXIO_MASTER_HOSTNAME}:19998"
+    local master_hostname=$(${BIN}/alluxio getConf alluxio.master.hostname)
+    if [[ -z ${master_hostname} ]]; then
+      echo "alluxio.master.hostname or ALLUXIO_MASTER_HOSTNAME must be configured to use runTest" >&2
+      exit 1
+    fi
+    PARAMETER="alluxio://${master_hostname}:19998"
     ALLUXIO_SHELL_JAVA_OPTS+=" -Dalluxio.logger.type=Console"
     runJavaClass "$@"
   ;;
@@ -306,17 +276,34 @@ function main {
   ;;
   "runTests")
     CLASS="alluxio.cli.TestRunner"
-    PARAMETER="alluxio://${ALLUXIO_MASTER_HOSTNAME}:19998"
+    local master_hostname=$(${BIN}/alluxio getConf alluxio.master.hostname)
+    if [[ -z ${master_hostname} ]]; then
+      echo "alluxio.master.hostname or ALLUXIO_MASTER_HOSTNAME must be configured to use runTests" >&2
+      exit 1
+    fi
+    PARAMETER="alluxio://${master_hostname}:19998"
     ALLUXIO_SHELL_JAVA_OPTS+=" -Dalluxio.logger.type=Console"
     runJavaClass "$@"
   ;;
+  "runMiniBenchmark")
+    CLASS="alluxio.cli.MiniBenchmark"
+    PARAMETER="alluxio://${ALLUXIO_MASTER_HOSTNAME}:19998"
+    ALLUXIO_SHELL_JAVA_OPTS+=" -Dalluxio.logger.type=Console"
+    runJavaClass "$@"
+    ;;
   "runJournalCrashTest")
     CLASS="alluxio.cli.JournalCrashTest"
     ALLUXIO_SHELL_JAVA_OPTS+=" -Dalluxio.logger.type=Console"
     runJavaClass "$@"
   ;;
+  "runMesosTest")
+    CLASS="alluxio.cli.AlluxioFrameworkIntegrationTest"
+    ALLUXIO_SHELL_JAVA_OPTS+=" -Dalluxio.logger.type=Console"
+    runJavaClass "$@"
+  ;;
   "readJournal")
     CLASS="alluxio.master.journal.JournalTool"
+    ALLUXIO_SHELL_JAVA_OPTS+=" -Dalluxio.logger.type=Console"
     runJavaClass "$@"
   ;;
   "killAll")
@@ -330,14 +317,18 @@ function main {
     for thriftSrcPath in ${thriftSrcPaths[@]}; do
       rm -rf "${thriftSrcPath}/../main/java/alluxio/thrift"
       for srcFile in $(ls "${thriftSrcPath}"); do
-        thrift -I "${BIN}/../core/common/src/thrift" --gen java:private-members -out "${thriftSrcPath}/../main/java/." "${thriftSrcPath}/${srcFile}"
+        thrift -I "${BIN}/../core/common/src/thrift" --gen java:private-members,generated_annotations=undated -out "${thriftSrcPath}/../main/java/." "${thriftSrcPath}/${srcFile}"
       done
     done
   ;;
   "protoGen")
     rm -rf ${BIN}/../core/server/src/main/java/alluxio/proto
-    for src_file in $(find ${BIN}/../core/server/src/proto -type f); do
-      protoc --java_out=${BIN}/../core/server/src/main/java --proto_path=`dirname ${src_file}` ${src_file}
+    for src_file in $(find ${BIN}/../core/server/src/proto -name '*.proto' -type f); do
+      protoc --java_out=${BIN}/../core/server/src/main/java --proto_path=$(dirname ${src_file}) ${src_file}
+    done
+    rm -rf ${BIN}/../core/common/src/main/java/alluxio/proto
+    for src_file in $(find ${BIN}/../core/common/src/proto -name '*.proto' -type f); do
+      protoc --java_out=${BIN}/../core/common/src/main/java --proto_path=`dirname ${src_file}` ${src_file}
     done
   ;;
   "clearCache")

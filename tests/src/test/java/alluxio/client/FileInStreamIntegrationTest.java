@@ -12,11 +12,11 @@
 package alluxio.client;
 
 import alluxio.AlluxioURI;
-import alluxio.Constants;
 import alluxio.LocalAlluxioClusterResource;
 import alluxio.client.file.FileInStream;
 import alluxio.client.file.FileSystem;
 import alluxio.client.file.options.CreateFileOptions;
+import alluxio.security.authorization.Mode;
 import alluxio.util.io.BufferUtils;
 import alluxio.util.io.PathUtils;
 
@@ -42,7 +42,7 @@ public final class FileInStreamIntegrationTest {
 
   @ClassRule
   public static LocalAlluxioClusterResource sLocalAlluxioClusterResource =
-      new LocalAlluxioClusterResource(Constants.GB, BLOCK_SIZE);
+      new LocalAlluxioClusterResource.Builder().build();
   private static FileSystem sFileSystem = null;
   private static CreateFileOptions sWriteBoth;
   private static CreateFileOptions sWriteAlluxio;
@@ -58,9 +58,12 @@ public final class FileInStreamIntegrationTest {
   @BeforeClass
   public static final void beforeClass() throws Exception {
     sFileSystem = sLocalAlluxioClusterResource.get().getClient();
-    sWriteBoth = CreateFileOptions.defaults().setWriteType(WriteType.CACHE_THROUGH);
-    sWriteAlluxio = CreateFileOptions.defaults().setWriteType(WriteType.MUST_CACHE);
-    sWriteUnderStore = CreateFileOptions.defaults().setWriteType(WriteType.THROUGH);
+    sWriteBoth = CreateFileOptions.defaults().setMode(Mode.createFullAccess())
+        .setWriteType(WriteType.CACHE_THROUGH);
+    sWriteAlluxio = CreateFileOptions.defaults().setMode(Mode.createFullAccess())
+        .setWriteType(WriteType.MUST_CACHE);
+    sWriteUnderStore = CreateFileOptions.defaults().setMode(Mode.createFullAccess())
+        .setWriteType(WriteType.THROUGH);
     sTestPath = PathUtils.uniqPath();
 
     // Create files of varying size and write type to later read from

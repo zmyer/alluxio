@@ -28,16 +28,13 @@ import alluxio.heartbeat.HeartbeatContext;
 import alluxio.heartbeat.HeartbeatExecutor;
 import alluxio.heartbeat.HeartbeatThread;
 import alluxio.master.AbstractMaster;
-import alluxio.master.MasterContext;
-import alluxio.master.MasterSource;
 import alluxio.master.block.meta.MasterBlockInfo;
 import alluxio.master.block.meta.MasterBlockLocation;
 import alluxio.master.block.meta.MasterWorkerInfo;
-import alluxio.master.journal.AsyncJournalWriter;
-import alluxio.master.journal.Journal;
+import alluxio.master.journal.JournalFactory;
 import alluxio.master.journal.JournalInputStream;
 import alluxio.master.journal.JournalOutputStream;
-import alluxio.master.journal.JournalProtoUtils;
+import alluxio.metrics.MetricsSystem;
 import alluxio.proto.journal.Block.BlockContainerIdGeneratorEntry;
 import alluxio.proto.journal.Block.BlockInfoEntry;
 import alluxio.proto.journal.Journal.JournalEntry;
@@ -45,15 +42,16 @@ import alluxio.thrift.BlockMasterClientService;
 import alluxio.thrift.BlockMasterWorkerService;
 import alluxio.thrift.Command;
 import alluxio.thrift.CommandType;
-import alluxio.util.ThreadFactoryUtils;
-import alluxio.util.io.PathUtils;
+import alluxio.util.IdUtils;
+import alluxio.util.executor.ExecutorServiceFactories;
+import alluxio.util.executor.ExecutorServiceFactory;
 import alluxio.wire.BlockInfo;
 import alluxio.wire.BlockLocation;
 import alluxio.wire.WorkerInfo;
 import alluxio.wire.WorkerNetAddress;
 
+import com.codahale.metrics.Gauge;
 import com.google.common.collect.ImmutableSet;
-import com.google.protobuf.Message;
 import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 import io.netty.util.internal.chmv8.ConcurrentHashMapV8;
 import org.apache.thrift.TProcessor;
@@ -70,10 +68,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
-import java.util.concurrent.atomic.AtomicLong;
 
 import javax.annotation.concurrent.GuardedBy;
 import javax.annotation.concurrent.NotThreadSafe;
@@ -159,45 +154,32 @@ public final class BlockMaster extends AbstractMaster implements ContainerIdGene
   @SuppressFBWarnings("URF_UNREAD_FIELD")
   private Future<?> mLostWorkerDetectionService;
 
-  /** The next worker id to use. This state must be journaled. */
-  private final AtomicLong mNextWorkerId = new AtomicLong(1);
-
   /** The value of the 'next container id' last journaled. */
   @GuardedBy("mBlockContainerIdGenerator")
   private long mJournaledNextContainerId = 0;
 
   /**
-   * @param baseDirectory the base journal directory
-   * @return the journal directory for this master
-   */
-  public static String getJournalDirectory(String baseDirectory) {
-    return PathUtils.concatPath(baseDirectory, Constants.BLOCK_MASTER_NAME);
-  }
-
-  /**
-   * Creates a new instance of {@link BlockMaster} with the default {@link MasterSource}.
+   * Creates a new instance of {@link BlockMaster}.
    *
-   * @param masterContext context for the master
-   * @param journal the journal to use for tracking master operations
+   * @param journalFactory the factory for the journal to use for tracking master operations
    */
-  public BlockMaster(MasterContext masterContext, Journal journal) {
-    super(masterContext, journal, new SystemClock(), Executors.newFixedThreadPool(2,
-        ThreadFactoryUtils.build("BlockMaster-%d", true)));
+  public BlockMaster(JournalFactory journalFactory) {
+    this(journalFactory, new SystemClock(), ExecutorServiceFactories
+        .fixedThreadPoolExecutorServiceFactory(Constants.BLOCK_MASTER_NAME, 2));
   }
 
   /**
    * Creates a new instance of {@link BlockMaster}.
    *
-   * @param masterContext the master context
-   * @param journal the journal to use for tracking master operations
+   * @param journalFactory the factory for the journal to use for tracking master operations
    * @param clock the clock to use for determining the time
-   * @param executorService the executor service to use for launching maintenance threads; the
-   *        {@link BlockMaster} becomes the owner of the executorService and will shut it down when
-   *        the master stops
+   * @param executorServiceFactory a factory for creating the executor service to use for running
+   *        maintenance threads
    */
-  public BlockMaster(MasterContext masterContext, Journal journal, Clock clock,
-      ExecutorService executorService) {
-    super(masterContext, journal, clock, executorService);
+  public BlockMaster(JournalFactory journalFactory, Clock clock,
+      ExecutorServiceFactory executorServiceFactory) {
+    super(journalFactory.get(Constants.BLOCK_MASTER_NAME), clock, executorServiceFactory);
+    Metrics.registerGauges(this);
   }
 
   @Override
@@ -224,14 +206,12 @@ public final class BlockMaster extends AbstractMaster implements ContainerIdGene
 
   @Override
   public void processJournalEntry(JournalEntry entry) throws IOException {
-    Message innerEntry = JournalProtoUtils.unwrap(entry);
     // TODO(gene): A better way to process entries besides a huge switch?
-    if (innerEntry instanceof BlockContainerIdGeneratorEntry) {
-      mJournaledNextContainerId =
-          ((BlockContainerIdGeneratorEntry) innerEntry).getNextContainerId();
+    if (entry.hasBlockContainerIdGenerator()) {
+      mJournaledNextContainerId = (entry.getBlockContainerIdGenerator()).getNextContainerId();
       mBlockContainerIdGenerator.setNextContainerId((mJournaledNextContainerId));
-    } else if (innerEntry instanceof BlockInfoEntry) {
-      BlockInfoEntry blockInfoEntry = (BlockInfoEntry) innerEntry;
+    } else if (entry.hasBlockInfo()) {
+      BlockInfoEntry blockInfoEntry = entry.getBlockInfo();
       if (mBlocks.containsKey(blockInfoEntry.getBlockId())) {
         // Update the existing block info.
         MasterBlockInfo blockInfo = mBlocks.get(blockInfoEntry.getBlockId());
@@ -321,12 +301,10 @@ public final class BlockMaster extends AbstractMaster implements ContainerIdGene
   }
 
   /**
-   * Gets info about the lost workers.
-   *
-   * @return a set of worker info
+   * @return a set of {@link WorkerInfo}s of lost workers
    */
-  public Set<WorkerInfo> getLostWorkersInfo() {
-    Set<WorkerInfo> ret = new HashSet<>(mLostWorkers.size());
+  public List<WorkerInfo> getLostWorkersInfoList() {
+    List<WorkerInfo> ret = new ArrayList<>(mLostWorkers.size());
     for (MasterWorkerInfo worker : mLostWorkers) {
       synchronized (worker) {
         ret.add(worker.generateClientWorkerInfo());
@@ -400,10 +378,11 @@ public final class BlockMaster extends AbstractMaster implements ContainerIdGene
       // Set the next id to journal with a reservation of container ids, to avoid having to write
       // to the journal for ids within the reservation.
       mJournaledNextContainerId = containerId + CONTAINER_ID_RESERVATION_SIZE;
-      long counter = appendJournalEntry(getContainerIdJournalEntry());
-      // This must be flushed while holding the lock on mBlockContainerIdGenerator, in order to
-      // prevent subsequent calls to return container ids that have not been journaled and flushed.
-      waitForJournalFlush(counter);
+      try (JournalContext journalContext = createJournalContext()) {
+        // This must be flushed while holding the lock on mBlockContainerIdGenerator, in order to
+        // prevent subsequent calls to return ids that have not been journaled and flushed.
+        appendJournalEntry(getContainerIdJournalEntry(), journalContext);
+      }
       return containerId;
     }
   }
@@ -435,8 +414,6 @@ public final class BlockMaster extends AbstractMaster implements ContainerIdGene
     LOG.debug("Commit block from workerId: {}, usedBytesOnTier: {}, blockId: {}, length: {}",
         workerId, usedBytesOnTier, blockId, length);
 
-    long counter = AsyncJournalWriter.INVALID_FLUSH_COUNTER;
-
     MasterWorkerInfo worker = mWorkers.getFirstByField(ID_INDEX, workerId);
     // TODO(peis): Check lost workers as well.
     if (worker == null) {
@@ -444,59 +421,59 @@ public final class BlockMaster extends AbstractMaster implements ContainerIdGene
     }
 
     // Lock the worker metadata first.
-    synchronized (worker) {
-      // Loop until block metadata is successfully locked.
-      for (;;) {
-        boolean newBlock = false;
-        MasterBlockInfo block = mBlocks.get(blockId);
-        if (block == null) {
-          // The block metadata doesn't exist yet.
-          block = new MasterBlockInfo(blockId, length);
-          newBlock = true;
-        }
+    try (JournalContext journalContext = createJournalContext()) {
+      synchronized (worker) {
+        // Loop until block metadata is successfully locked.
+        while (true) {
+          boolean newBlock = false;
+          MasterBlockInfo block = mBlocks.get(blockId);
+          if (block == null) {
+            // The block metadata doesn't exist yet.
+            block = new MasterBlockInfo(blockId, length);
+            newBlock = true;
+          }
 
-        // Lock the block metadata.
-        synchronized (block) {
-          boolean writeJournal = false;
-          if (newBlock) {
-            if (mBlocks.putIfAbsent(blockId, block) != null) {
-              // Another thread already inserted the metadata for this block, so start loop over.
-              continue;
+          // Lock the block metadata.
+          synchronized (block) {
+            boolean writeJournal = false;
+            if (newBlock) {
+              if (mBlocks.putIfAbsent(blockId, block) != null) {
+                // Another thread already inserted the metadata for this block, so start loop over.
+                continue;
+              }
+              // Successfully added the new block metadata. Append a journal entry for the new
+              // metadata.
+              writeJournal = true;
+            } else if (block.getLength() != length && block.getLength() == Constants.UNKNOWN_SIZE) {
+              // The block size was previously unknown. Update the block size with the committed
+              // size, and append a journal entry.
+              block.updateLength(length);
+              writeJournal = true;
             }
-            // Successfully added the new block metadata. Append a journal entry for the new
-            // metadata.
-            writeJournal = true;
-          } else if (block.getLength() != length
-              && block.getLength() == Constants.UNKNOWN_SIZE) {
-            // The block size was previously unknown. Update the block size with the committed
-            // size, and append a journal entry.
-            block.updateLength(length);
-            writeJournal = true;
-          }
-          if (writeJournal) {
-            BlockInfoEntry blockInfo =
-                BlockInfoEntry.newBuilder().setBlockId(blockId).setLength(length).build();
-            counter = appendJournalEntry(JournalEntry.newBuilder().setBlockInfo(blockInfo).build());
-          }
-          // At this point, both the worker and the block metadata are locked.
+            if (writeJournal) {
+              BlockInfoEntry blockInfo =
+                  BlockInfoEntry.newBuilder().setBlockId(blockId).setLength(length).build();
+              appendJournalEntry(JournalEntry.newBuilder().setBlockInfo(blockInfo).build(),
+                  journalContext);
+            }
+            // At this point, both the worker and the block metadata are locked.
 
-          // Update the block metadata with the new worker location.
-          block.addWorker(workerId, tierAlias);
-          // This worker has this block, so it is no longer lost.
-          mLostBlocks.remove(blockId);
+            // Update the block metadata with the new worker location.
+            block.addWorker(workerId, tierAlias);
+            // This worker has this block, so it is no longer lost.
+            mLostBlocks.remove(blockId);
 
-          // Update the worker information for this new block.
-          // TODO(binfan): when retry commitBlock on master is expected, make sure metrics are not
-          // double counted.
-          worker.addBlock(blockId);
-          worker.updateUsedBytes(tierAlias, usedBytesOnTier);
-          worker.updateLastUpdatedTimeMs();
+            // Update the worker information for this new block.
+            // TODO(binfan): when retry commitBlock on master is expected, make sure metrics are not
+            // double counted.
+            worker.addBlock(blockId);
+            worker.updateUsedBytes(tierAlias, usedBytesOnTier);
+            worker.updateLastUpdatedTimeMs();
+          }
+          break;
         }
-        break;
       }
     }
-
-    waitForJournalFlush(counter);
   }
 
   /**
@@ -514,16 +491,17 @@ public final class BlockMaster extends AbstractMaster implements ContainerIdGene
 
     // The block has not been committed previously, so add the metadata to commit the block.
     MasterBlockInfo block = new MasterBlockInfo(blockId, length);
-    long counter = AsyncJournalWriter.INVALID_FLUSH_COUNTER;
-    synchronized (block) {
-      if (mBlocks.putIfAbsent(blockId, block) == null) {
-        // Successfully added the new block metadata. Append a journal entry for the new metadata.
-        BlockInfoEntry blockInfo =
-            BlockInfoEntry.newBuilder().setBlockId(blockId).setLength(length).build();
-        counter = appendJournalEntry(JournalEntry.newBuilder().setBlockInfo(blockInfo).build());
+    try (JournalContext journalContext = createJournalContext()) {
+      synchronized (block) {
+        if (mBlocks.putIfAbsent(blockId, block) == null) {
+          // Successfully added the new block metadata. Append a journal entry for the new metadata.
+          BlockInfoEntry blockInfo =
+              BlockInfoEntry.newBuilder().setBlockId(blockId).setLength(length).build();
+          appendJournalEntry(JournalEntry.newBuilder().setBlockInfo(blockInfo).build(),
+              journalContext);
+        }
       }
     }
-    waitForJournalFlush(counter);
   }
 
   /**
@@ -626,8 +604,10 @@ public final class BlockMaster extends AbstractMaster implements ContainerIdGene
     }
 
     // Generate a new worker id.
-    long workerId = mNextWorkerId.getAndIncrement();
-    mWorkers.add(new MasterWorkerInfo(workerId, workerNetAddress));
+    long workerId = IdUtils.getRandomNonNegativeLong();
+    while (!mWorkers.add(new MasterWorkerInfo(workerId, workerNetAddress))) {
+      workerId = IdUtils.getRandomNonNegativeLong();
+    }
 
     LOG.info("getWorkerId(): WorkerNetAddress: {} id: {}", workerNetAddress, workerId);
     return workerId;
@@ -764,7 +744,7 @@ public final class BlockMaster extends AbstractMaster implements ContainerIdGene
   }
 
   /**
-   * @return the lost blocks in Alluxio Storage
+   * @return the block ids of lost blocks in Alluxio
    */
   public Set<Long> getLostBlocks() {
     return ImmutableSet.copyOf(mLostBlocks);
@@ -846,5 +826,51 @@ public final class BlockMaster extends AbstractMaster implements ContainerIdGene
     public void close() {
       // Nothing to clean up
     }
+  }
+
+  /**
+   * Class that contains metrics related to BlockMaster.
+   */
+  public static final class Metrics {
+    public static final String CAPACITY_TOTAL = "CapacityTotal";
+    public static final String CAPACITY_USED = "CapacityUsed";
+    public static final String CAPACITY_FREE = "CapacityFree";
+    public static final String WORKERS = "Workers";
+
+    private static void registerGauges(final BlockMaster master) {
+      MetricsSystem.registerGaugeIfAbsent(MetricsSystem.getMasterMetricName(CAPACITY_TOTAL),
+          new Gauge<Long>() {
+            @Override
+            public Long getValue() {
+              return master.getCapacityBytes();
+            }
+          });
+
+      MetricsSystem.registerGaugeIfAbsent(MetricsSystem.getMasterMetricName(CAPACITY_USED),
+          new Gauge<Long>() {
+            @Override
+            public Long getValue() {
+              return master.getUsedBytes();
+            }
+          });
+
+      MetricsSystem.registerGaugeIfAbsent(MetricsSystem.getMasterMetricName(CAPACITY_FREE),
+          new Gauge<Long>() {
+            @Override
+            public Long getValue() {
+              return master.getCapacityBytes() - master.getUsedBytes();
+            }
+          });
+
+      MetricsSystem.registerGaugeIfAbsent(MetricsSystem.getMasterMetricName(WORKERS),
+          new Gauge<Integer>() {
+            @Override
+            public Integer getValue() {
+              return master.getWorkerCount();
+            }
+          });
+    }
+
+    private Metrics() {} // prevent instantiation
   }
 }

@@ -15,11 +15,11 @@ import alluxio.Constants;
 import alluxio.exception.BlockInfoException;
 import alluxio.exception.FileAlreadyCompletedException;
 import alluxio.exception.InvalidFileSizeException;
+import alluxio.master.ProtobufUtils;
 import alluxio.master.block.BlockId;
 import alluxio.master.file.options.CreateFileOptions;
 import alluxio.proto.journal.File.InodeFileEntry;
 import alluxio.proto.journal.Journal.JournalEntry;
-import alluxio.security.authorization.Permission;
 import alluxio.wire.FileInfo;
 
 import com.google.common.base.Preconditions;
@@ -41,7 +41,6 @@ public final class InodeFile extends Inode<InodeFile> {
   private boolean mCacheable;
   private boolean mCompleted;
   private long mLength;
-  private long mTtl;
 
   /**
    * Creates a new instance of {@link InodeFile}.
@@ -56,7 +55,6 @@ public final class InodeFile extends Inode<InodeFile> {
     mCacheable = false;
     mCompleted = false;
     mLength = 0;
-    mTtl = Constants.NO_TTL;
   }
 
   @Override
@@ -83,6 +81,7 @@ public final class InodeFile extends Inode<InodeFile> {
     ret.setBlockIds(getBlockIds());
     ret.setLastModificationTimeMs(getLastModificationTimeMs());
     ret.setTtl(mTtl);
+    ret.setTtlAction(mTtlAction);
     ret.setOwner(getOwner());
     ret.setGroup(getGroup());
     ret.setMode(getMode());
@@ -212,15 +211,6 @@ public final class InodeFile extends Inode<InodeFile> {
   }
 
   /**
-   * @param ttl the TTL to use, in milliseconds
-   * @return the updated object
-   */
-  public InodeFile setTtl(long ttl) {
-    mTtl = ttl;
-    return getThis();
-  }
-
-  /**
    * Completes the file. Cannot set the length if the file is already completed. However, an unknown
    * file size, {@link Constants#UNKNOWN_SIZE}, is valid. Cannot complete an already complete file,
    * unless the completed length was previously {@link Constants#UNKNOWN_SIZE}.
@@ -255,9 +245,13 @@ public final class InodeFile extends Inode<InodeFile> {
 
   @Override
   public String toString() {
-    return toStringHelper().add("blocks", mBlocks).add("blockContainerId", mBlockContainerId)
-        .add("blockSizeBytes", mBlockSizeBytes).add("cacheable", mCacheable)
-        .add("completed", mCompleted).add("length", mLength).add("ttl", mTtl).toString();
+    return toStringHelper()
+        .add("blocks", mBlocks)
+        .add("blockContainerId", mBlockContainerId)
+        .add("blockSizeBytes", mBlockSizeBytes)
+        .add("cacheable", mCacheable)
+        .add("completed", mCompleted)
+        .add("length", mLength).toString();
   }
 
   /**
@@ -267,9 +261,6 @@ public final class InodeFile extends Inode<InodeFile> {
    * @return the {@link InodeFile} representation
    */
   public static InodeFile fromJournalEntry(InodeFileEntry entry) {
-    Permission permission =
-        new Permission(entry.getOwner(), entry.getGroup(), (short) entry.getMode());
-
     return new InodeFile(BlockId.getContainerId(entry.getId()))
         .setName(entry.getName())
         .setBlockIds(entry.getBlocksList())
@@ -277,13 +268,16 @@ public final class InodeFile extends Inode<InodeFile> {
         .setCacheable(entry.getCacheable())
         .setCompleted(entry.getCompleted())
         .setCreationTimeMs(entry.getCreationTimeMs())
-        .setLastModificationTimeMs(entry.getLastModificationTimeMs())
+        .setLastModificationTimeMs(entry.getLastModificationTimeMs(), true)
         .setLength(entry.getLength())
         .setParentId(entry.getParentId())
         .setPersistenceState(PersistenceState.valueOf(entry.getPersistenceState()))
         .setPinned(entry.getPinned())
         .setTtl(entry.getTtl())
-        .setPermission(permission);
+        .setTtlAction((ProtobufUtils.fromProtobuf(entry.getTtlAction())))
+        .setOwner(entry.getOwner())
+        .setGroup(entry.getGroup())
+        .setMode((short) entry.getMode());
   }
 
   /**
@@ -293,21 +287,23 @@ public final class InodeFile extends Inode<InodeFile> {
    * @param parentId id of the parent of this inode
    * @param name name of this inode
    * @param creationTimeMs the creation time for this inode
-   * @param fileOptions options to create this file
+   * @param options options to create this file
    * @return the {@link InodeFile} representation
    */
   public static InodeFile create(long blockContainerId, long parentId, String name,
-      long creationTimeMs, CreateFileOptions fileOptions) {
-    Permission permission = new Permission(fileOptions.getPermission()).applyFileUMask();
+      long creationTimeMs, CreateFileOptions options) {
     return new InodeFile(blockContainerId)
-        .setBlockSizeBytes(fileOptions.getBlockSizeBytes())
+        .setBlockSizeBytes(options.getBlockSizeBytes())
         .setCreationTimeMs(creationTimeMs)
         .setName(name)
-        .setTtl(fileOptions.getTtl())
+        .setTtl(options.getTtl())
+        .setTtlAction(options.getTtlAction())
         .setParentId(parentId)
-        .setPermission(permission)
-        .setPersistenceState(fileOptions.isPersisted() ? PersistenceState.PERSISTED :
-            PersistenceState.NOT_PERSISTED);
+        .setOwner(options.getOwner())
+        .setGroup(options.getGroup())
+        .setMode(options.getMode().toShort())
+        .setPersistenceState(options.isPersisted() ? PersistenceState.PERSISTED
+            : PersistenceState.NOT_PERSISTED);
 
   }
 
@@ -330,14 +326,8 @@ public final class InodeFile extends Inode<InodeFile> {
         .setPersistenceState(getPersistenceState().name())
         .setPinned(isPinned())
         .setTtl(getTtl())
-        .build();
+        .setTtlAction(ProtobufUtils.toProtobuf(getTtlAction())).build();
     return JournalEntry.newBuilder().setInodeFile(inodeFile).build();
   }
 
-  /**
-   * @return the ttl of the file
-   */
-  public long getTtl() {
-    return mTtl;
-  }
 }

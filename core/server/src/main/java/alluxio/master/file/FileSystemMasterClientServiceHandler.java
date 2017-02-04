@@ -17,20 +17,25 @@ import alluxio.RpcUtils;
 import alluxio.RpcUtils.RpcCallable;
 import alluxio.RpcUtils.RpcCallableThrowsIOException;
 import alluxio.exception.AlluxioException;
+import alluxio.master.file.options.CheckConsistencyOptions;
 import alluxio.master.file.options.CompleteFileOptions;
 import alluxio.master.file.options.CreateDirectoryOptions;
 import alluxio.master.file.options.CreateFileOptions;
+import alluxio.master.file.options.FreeOptions;
 import alluxio.master.file.options.ListStatusOptions;
 import alluxio.master.file.options.LoadMetadataOptions;
 import alluxio.master.file.options.MountOptions;
+import alluxio.master.file.options.RenameOptions;
 import alluxio.master.file.options.SetAttributeOptions;
 import alluxio.thrift.AlluxioTException;
+import alluxio.thrift.CheckConsistencyTOptions;
 import alluxio.thrift.CompleteFileTOptions;
 import alluxio.thrift.CreateDirectoryTOptions;
 import alluxio.thrift.CreateFileTOptions;
 import alluxio.thrift.FileBlockInfo;
 import alluxio.thrift.FileInfo;
 import alluxio.thrift.FileSystemMasterClientService;
+import alluxio.thrift.FreeTOptions;
 import alluxio.thrift.ListStatusTOptions;
 import alluxio.thrift.MountTOptions;
 import alluxio.thrift.SetAttributeTOptions;
@@ -66,6 +71,23 @@ public final class FileSystemMasterClientServiceHandler implements
   @Override
   public long getServiceVersion() {
     return Constants.FILE_SYSTEM_MASTER_CLIENT_SERVICE_VERSION;
+  }
+
+  @Override
+  public List<String> checkConsistency(final String path, final CheckConsistencyTOptions options)
+      throws AlluxioTException, ThriftIOException {
+    return RpcUtils.call(new RpcCallableThrowsIOException<List<String>>() {
+      @Override
+      public List<String> call() throws AlluxioException, IOException {
+        List<AlluxioURI> inconsistentUris = mFileSystemMaster.checkConsistency(
+            new AlluxioURI(path), new CheckConsistencyOptions(options));
+        List<String> uris = new ArrayList<>(inconsistentUris.size());
+        for (AlluxioURI uri : inconsistentUris) {
+          uris.add(uri.getPath());
+        }
+        return uris;
+      }
+    });
   }
 
   @Override
@@ -106,11 +128,20 @@ public final class FileSystemMasterClientServiceHandler implements
   }
 
   @Override
-  public void free(final String path, final boolean recursive) throws AlluxioTException {
+  public void free(final String path, final boolean recursive, final FreeTOptions options)
+      throws AlluxioTException {
     RpcUtils.call(new RpcCallable<Void>() {
       @Override
       public Void call() throws AlluxioException {
-        mFileSystemMaster.free(new AlluxioURI(path), recursive);
+        if (options == null) {
+          // For Alluxio client v1.4 or earlier.
+          // NOTE, we try to be conservative here so early Alluxio clients will not be able to force
+          // freeing pinned items but see the error thrown.
+          mFileSystemMaster.free(new AlluxioURI(path),
+              FreeOptions.defaults().setRecursive(recursive));
+        } else {
+          mFileSystemMaster.free(new AlluxioURI(path), new FreeOptions(options));
+        }
         return null;
       }
     });
@@ -181,8 +212,13 @@ public final class FileSystemMasterClientServiceHandler implements
    */
   @Override
   @Deprecated
-  public String getUfsAddress() {
-    return mFileSystemMaster.getUfsAddress();
+  public String getUfsAddress() throws AlluxioTException {
+    return RpcUtils.call(new RpcCallable<String>() {
+      @Override
+      public String call() throws AlluxioException {
+        return mFileSystemMaster.getUfsAddress();
+      }
+    });
   }
 
   @Override
@@ -250,7 +286,8 @@ public final class FileSystemMasterClientServiceHandler implements
     RpcUtils.call(new RpcCallableThrowsIOException<Void>() {
       @Override
       public Void call() throws AlluxioException, IOException {
-        mFileSystemMaster.rename(new AlluxioURI(srcPath), new AlluxioURI(dstPath));
+        mFileSystemMaster
+            .rename(new AlluxioURI(srcPath), new AlluxioURI(dstPath), RenameOptions.defaults());
         return null;
       }
     });

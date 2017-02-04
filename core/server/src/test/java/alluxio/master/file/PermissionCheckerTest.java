@@ -19,21 +19,19 @@ import alluxio.PropertyKey;
 import alluxio.exception.AccessControlException;
 import alluxio.exception.ExceptionMessage;
 import alluxio.exception.InvalidPathException;
-import alluxio.master.MasterContext;
-import alluxio.master.MasterSource;
 import alluxio.master.block.BlockMaster;
 import alluxio.master.file.meta.Inode;
 import alluxio.master.file.meta.InodeDirectoryIdGenerator;
+import alluxio.master.file.meta.InodeFile;
 import alluxio.master.file.meta.InodeTree;
 import alluxio.master.file.meta.LockedInodePath;
 import alluxio.master.file.meta.MountTable;
 import alluxio.master.file.options.CreateFileOptions;
-import alluxio.master.journal.Journal;
-import alluxio.master.journal.ReadWriteJournal;
+import alluxio.master.journal.JournalFactory;
+import alluxio.security.GroupMappingServiceTestUtils;
 import alluxio.security.authentication.AuthType;
 import alluxio.security.authentication.AuthenticatedClientUser;
 import alluxio.security.authorization.Mode;
-import alluxio.security.authorization.Permission;
 import alluxio.security.group.GroupMappingService;
 
 import com.google.common.collect.Lists;
@@ -87,14 +85,8 @@ public final class PermissionCheckerTest {
   private static final String TEST_NOT_EXIST_URI = "/testDir/notExistDir/notExistFile";
   private static final String TEST_WEIRD_FILE_URI = "/testWeirdFile";
 
-  private static final Permission TEST_PERMISSION_SUPER =
-      new Permission(TEST_USER_ADMIN.getUser(), TEST_USER_ADMIN.getGroups(), (short) 0755);
-  private static final Permission TEST_PERMISSION_1 =
-      new Permission(TEST_USER_1.getUser(), TEST_USER_1.getGroups(), (short) 0755);
-  private static final Permission TEST_PERMISSION_2 =
-      new Permission(TEST_USER_2.getUser(), TEST_USER_2.getGroups(), (short) 0755);
-  private static final Permission TEST_PERMISSION_WEIRD =
-      new Permission(TEST_USER_1.getUser(), TEST_USER_1.getGroups(), (short) 0157);
+  private static final Mode TEST_NORMAL_MODE = new Mode((short) 0755);
+  private static final Mode TEST_WEIRD_MODE = new Mode((short) 0157);
 
   private static CreateFileOptions sFileOptions;
   private static CreateFileOptions sWeirdFileOptions;
@@ -115,19 +107,19 @@ public final class PermissionCheckerTest {
    */
   private static final class TestUser {
     private String mUser;
-    private String mGroups;
+    private String mGroup;
 
-    TestUser(String user, String groups) {
+    TestUser(String user, String group) {
       mUser = user;
-      mGroups = groups;
+      mGroup = group;
     }
 
     String getUser() {
       return mUser;
     }
 
-    String getGroups() {
-      return mGroups;
+    String getGroup() {
+      return mGroup;
     }
   }
 
@@ -135,11 +127,11 @@ public final class PermissionCheckerTest {
     private HashMap<String, String> mUserGroups = new HashMap<>();
 
     public FakeUserGroupsMapping() {
-      mUserGroups.put(TEST_USER_ADMIN.getUser(), TEST_USER_ADMIN.getGroups());
-      mUserGroups.put(TEST_USER_1.getUser(), TEST_USER_1.getGroups());
-      mUserGroups.put(TEST_USER_2.getUser(), TEST_USER_2.getGroups());
-      mUserGroups.put(TEST_USER_3.getUser(), TEST_USER_3.getGroups());
-      mUserGroups.put(TEST_USER_SUPERGROUP.getUser(), TEST_USER_SUPERGROUP.getGroups());
+      mUserGroups.put(TEST_USER_ADMIN.getUser(), TEST_USER_ADMIN.getGroup());
+      mUserGroups.put(TEST_USER_1.getUser(), TEST_USER_1.getGroup());
+      mUserGroups.put(TEST_USER_2.getUser(), TEST_USER_2.getGroup());
+      mUserGroups.put(TEST_USER_3.getUser(), TEST_USER_3.getGroup());
+      mUserGroups.put(TEST_USER_SUPERGROUP.getUser(), TEST_USER_SUPERGROUP.getGroup());
     }
 
     @Override
@@ -153,29 +145,34 @@ public final class PermissionCheckerTest {
 
   @BeforeClass
   public static void beforeClass() throws Exception {
-    sFileOptions = CreateFileOptions.defaults().setBlockSizeBytes(Constants.KB)
-        .setPermission(TEST_PERMISSION_2);
-    sWeirdFileOptions = CreateFileOptions.defaults().setBlockSizeBytes(Constants.KB)
-        .setPermission(TEST_PERMISSION_WEIRD);
-    sNestedFileOptions = CreateFileOptions.defaults().setBlockSizeBytes(Constants.KB)
-        .setPermission(TEST_PERMISSION_1).setRecursive(true);
+    sFileOptions =
+        CreateFileOptions.defaults().setBlockSizeBytes(Constants.KB).setOwner(TEST_USER_2.getUser())
+            .setGroup(TEST_USER_2.getGroup()).setMode(TEST_NORMAL_MODE);
+    sWeirdFileOptions =
+        CreateFileOptions.defaults().setBlockSizeBytes(Constants.KB).setOwner(TEST_USER_1.getUser())
+            .setGroup(TEST_USER_1.getGroup()).setMode(TEST_WEIRD_MODE);
+    sNestedFileOptions =
+        CreateFileOptions.defaults().setBlockSizeBytes(Constants.KB).setOwner(TEST_USER_1.getUser())
+            .setGroup(TEST_USER_1.getGroup()).setMode(TEST_NORMAL_MODE).setRecursive(true);
 
     // setup an InodeTree
-    Journal blockJournal = new ReadWriteJournal(sTestFolder.newFolder().getAbsolutePath());
+    JournalFactory journalFactory =
+        new JournalFactory.ReadWrite(sTestFolder.newFolder().getAbsolutePath());
 
-    BlockMaster blockMaster = new BlockMaster(new MasterContext(new MasterSource()), blockJournal);
+    BlockMaster blockMaster = new BlockMaster(journalFactory);
     InodeDirectoryIdGenerator directoryIdGenerator = new InodeDirectoryIdGenerator(blockMaster);
     MountTable mountTable = new MountTable();
     sTree = new InodeTree(blockMaster, directoryIdGenerator, mountTable);
 
     blockMaster.start(true);
 
+    GroupMappingServiceTestUtils.resetCache();
     Configuration.set(PropertyKey.SECURITY_GROUP_MAPPING_CLASS,
         FakeUserGroupsMapping.class.getName());
     Configuration.set(PropertyKey.SECURITY_AUTHENTICATION_TYPE, AuthType.SIMPLE.getAuthName());
     Configuration.set(PropertyKey.SECURITY_AUTHORIZATION_PERMISSION_ENABLED, "true");
     Configuration.set(PropertyKey.SECURITY_AUTHORIZATION_PERMISSION_SUPERGROUP, TEST_SUPER_GROUP);
-    sTree.initializeRoot(TEST_PERMISSION_SUPER);
+    sTree.initializeRoot(TEST_USER_ADMIN.getUser(), TEST_USER_ADMIN.getGroup(), TEST_NORMAL_MODE);
 
     // build file structure
     createAndSetPermission(TEST_DIR_FILE_URI, sNestedFileOptions);
@@ -185,11 +182,13 @@ public final class PermissionCheckerTest {
 
   @AfterClass
   public static void afterClass() throws Exception {
+    AuthenticatedClientUser.remove();
     ConfigurationTestUtils.resetConfiguration();
   }
 
   @Before
   public void before() throws Exception {
+    AuthenticatedClientUser.remove();
     mPermissionChecker = new PermissionChecker(sTree);
   }
 
@@ -200,8 +199,9 @@ public final class PermissionCheckerTest {
         LockedInodePath inodePath = sTree
             .lockInodePath(new AlluxioURI(path), InodeTree.LockMode.WRITE)) {
       InodeTree.CreatePathResult result = sTree.createPath(inodePath, option);
-      result.getCreated().get(result.getCreated().size() - 1)
-          .setPermission(option.getPermission());
+      ((InodeFile) result.getCreated().get(result.getCreated().size() - 1))
+          .setOwner(option.getOwner()).setGroup(option.getGroup())
+          .setMode(option.getMode().toShort());
     }
   }
 

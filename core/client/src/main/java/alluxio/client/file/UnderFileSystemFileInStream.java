@@ -13,7 +13,9 @@ package alluxio.client.file;
 
 import alluxio.Configuration;
 import alluxio.PropertyKey;
-import alluxio.client.netty.NettyUnderFileSystemFileReader;
+import alluxio.Seekable;
+import alluxio.client.UnderFileSystemFileReader;
+import alluxio.exception.ExceptionMessage;
 import alluxio.exception.PreconditionMessage;
 import alluxio.util.io.BufferUtils;
 
@@ -32,7 +34,7 @@ import javax.annotation.concurrent.NotThreadSafe;
  */
 // TODO(calvin): See if common logic in this class and buffered block in stream can be abstracted
 @NotThreadSafe
-public final class UnderFileSystemFileInStream extends InputStream {
+public final class UnderFileSystemFileInStream extends InputStream implements Seekable {
   /** Current position of the stream, relative to the start of the block. */
   private long mPos;
   /** If the bytes in the internal buffer are valid. */
@@ -40,7 +42,7 @@ public final class UnderFileSystemFileInStream extends InputStream {
   /** Flag indicating EOF has been reached. */
   private boolean mEOF;
   /** Reader to the worker, currently only implemented through Netty. */
-  private final NettyUnderFileSystemFileReader mReader;
+  private final UnderFileSystemFileReader mReader;
   /** Address of the worker to write to. */
   private final InetSocketAddress mAddress;
   /** Worker file id referencing the file to write to. */
@@ -60,9 +62,10 @@ public final class UnderFileSystemFileInStream extends InputStream {
    * @param reader a reader for reading from the worker
    */
   public UnderFileSystemFileInStream(InetSocketAddress address, long ufsFileId,
-      NettyUnderFileSystemFileReader reader) {
+      UnderFileSystemFileReader reader) {
     mAddress = address;
     mUfsFileId = ufsFileId;
+    mPos = 0;
     mReader = reader;
     mBuffer = allocateBuffer();
     mIsBufferValid = false; // No data in buffer
@@ -132,6 +135,17 @@ public final class UnderFileSystemFileInStream extends InputStream {
     mBuffer.get(b, off, toRead);
     mPos += toRead;
     return toRead;
+  }
+
+  @Override
+  public void seek(long pos) throws IOException {
+    if (pos < 0) {
+      throw new IOException(ExceptionMessage.FAILED_SEEK.getMessage(pos));
+    }
+    if (pos != mPos) {
+      mIsBufferValid = false;
+      mPos = pos;
+    }
   }
 
   @Override

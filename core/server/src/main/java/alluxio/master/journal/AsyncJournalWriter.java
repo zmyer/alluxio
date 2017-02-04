@@ -34,13 +34,17 @@ import javax.annotation.concurrent.ThreadSafe;
 public final class AsyncJournalWriter {
   private static final Logger LOG = LoggerFactory.getLogger(Constants.LOGGER_TYPE);
 
-  /** An invalid journal flush counter. */
-  public static final long INVALID_FLUSH_COUNTER = -1;
-
   private final JournalWriter mJournalWriter;
   private final ConcurrentLinkedQueue<JournalEntry> mQueue;
+  /** Represents the count of entries added to the journal queue. */
   private final AtomicLong mCounter;
+  /** Represents the count of entries flushed to the journal writer. */
   private final AtomicLong mFlushCounter;
+  /**
+   * Represents the count of entries written to the journal writer.
+   * Invariant: {@code mWriteCounter >= mFlushCounter}
+   */
+  private final AtomicLong mWriteCounter;
   /** Maximum number of nanoseconds for a batch flush. */
   private final long mFlushBatchTime;
 
@@ -56,10 +60,11 @@ public final class AsyncJournalWriter {
    * @param journalWriter the {@link JournalWriter} to use for writing
    */
   public AsyncJournalWriter(JournalWriter journalWriter) {
-    mJournalWriter = Preconditions.checkNotNull(journalWriter);
+    mJournalWriter = Preconditions.checkNotNull(journalWriter, "journalWriter");
     mQueue = new ConcurrentLinkedQueue<>();
     mCounter = new AtomicLong(0);
     mFlushCounter = new AtomicLong(0);
+    mWriteCounter = new AtomicLong(0);
     // convert milliseconds to nanoseconds.
     mFlushBatchTime =
         1000000L * Configuration.getLong(PropertyKey.MASTER_JOURNAL_FLUSH_BATCH_TIME_MS);
@@ -100,11 +105,11 @@ public final class AsyncJournalWriter {
    * Flushes and waits until the specified counter is flushed to the journal. If the specified
    * counter is already flushed, this is essentially a no-op.
    *
-   * @param counter the counter to flush
+   * @param targetCounter the counter to flush
    * @throws IOException if an error occurs in flushing the journal
    */
-  public void flush(final long counter) throws IOException {
-    if (counter <= mFlushCounter.get()) {
+  public void flush(final long targetCounter) throws IOException {
+    if (targetCounter <= mFlushCounter.get()) {
       return;
     }
     // Using reentrant lock, since it seems to result in higher throughput than using 'synchronized'
@@ -112,21 +117,25 @@ public final class AsyncJournalWriter {
     try {
       long startTime = System.nanoTime();
       long flushCounter = mFlushCounter.get();
-      if (counter <= flushCounter) {
+      if (targetCounter <= flushCounter) {
         // The specified counter is already flushed, so just return.
         return;
       }
-      while (counter > flushCounter) {
+      long writeCounter = mWriteCounter.get();
+      while (targetCounter > writeCounter) {
         for (;;) {
-          JournalEntry entry = mQueue.poll();
+          // Get, but do not remove, the head entry.
+          JournalEntry entry = mQueue.peek();
           if (entry == null) {
             // No more entries in the queue. Break out of the infinite for-loop.
             break;
           }
-          mJournalWriter.getEntryOutputStream().writeEntry(entry);
-          flushCounter++;
+          mJournalWriter.writeEntry(entry);
+          // Remove the head entry, after the entry was successfully written.
+          mQueue.poll();
+          writeCounter = mWriteCounter.incrementAndGet();
 
-          if (flushCounter >= counter) {
+          if (writeCounter >= targetCounter) {
             if ((System.nanoTime() - startTime) >= mFlushBatchTime) {
               // This thread has been writing to the journal for enough time. Break out of the
               // infinite for-loop.
@@ -135,22 +144,10 @@ public final class AsyncJournalWriter {
           }
         }
       }
-      mJournalWriter.getEntryOutputStream().flush();
-      mFlushCounter.set(flushCounter);
+      mJournalWriter.flushEntryStream();
+      mFlushCounter.set(writeCounter);
     } finally {
       mFlushLock.unlock();
     }
-  }
-
-  /**
-   * Returns a flush counter that includes both specified counters. Either counter can be
-   * {@link #INVALID_FLUSH_COUNTER}.
-   *
-   * @param counter1 first flush counter
-   * @param counter2 second flush counter
-   * @return the flush counter that includes both specified counters
-   */
-  public static long getFlushCounter(long counter1, long counter2) {
-    return Math.max(counter1, counter2);
   }
 }

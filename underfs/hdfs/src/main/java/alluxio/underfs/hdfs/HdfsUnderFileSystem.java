@@ -17,16 +17,21 @@ import alluxio.Constants;
 import alluxio.PropertyKey;
 import alluxio.retry.CountingRetry;
 import alluxio.retry.RetryPolicy;
-import alluxio.security.authorization.Permission;
+import alluxio.underfs.AtomicFileOutputStream;
+import alluxio.underfs.AtomicFileOutputStreamCallback;
+import alluxio.underfs.BaseUnderFileSystem;
+import alluxio.underfs.UnderFileStatus;
 import alluxio.underfs.UnderFileSystem;
 import alluxio.underfs.options.CreateOptions;
+import alluxio.underfs.options.DeleteOptions;
+import alluxio.underfs.options.FileLocationOptions;
 import alluxio.underfs.options.MkdirsOptions;
+import alluxio.underfs.options.OpenOptions;
 
 import com.google.common.base.Throwables;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.hadoop.fs.BlockLocation;
 import org.apache.hadoop.fs.FSDataInputStream;
-import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
@@ -38,6 +43,8 @@ import org.slf4j.LoggerFactory;
 
 import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -49,7 +56,8 @@ import javax.annotation.concurrent.ThreadSafe;
  * HDFS {@link UnderFileSystem} implementation.
  */
 @ThreadSafe
-public class HdfsUnderFileSystem extends UnderFileSystem {
+public class HdfsUnderFileSystem extends BaseUnderFileSystem
+    implements AtomicFileOutputStreamCallback {
   private static final Logger LOG = LoggerFactory.getLogger(Constants.LOGGER_TYPE);
   private static final int MAX_TRY = 5;
   // TODO(hy): Add a sticky bit and narrow down the permission in hadoop 2.
@@ -88,8 +96,8 @@ public class HdfsUnderFileSystem extends UnderFileSystem {
   }
 
   @Override
-  public UnderFSType getUnderFSType() {
-    return UnderFSType.HDFS;
+  public String getUnderFSType() {
+    return "hdfs";
   }
 
   /**
@@ -115,11 +123,10 @@ public class HdfsUnderFileSystem extends UnderFileSystem {
       hadoopConf.set("fs.hdfs.impl", ufsHdfsImpl);
     }
 
-    // To disable the instance cache for hdfs client, otherwise it causes the
-    // FileSystem closed exception. Being configurable for unit/integration
-    // test only, and not expose to the end-user currently.
+    // Disable hdfs client caching so that input configuration is respected. Configurable from
+    // system property
     hadoopConf.set("fs.hdfs.impl.disable.cache",
-        System.getProperty("fs.hdfs.impl.disable.cache", "false"));
+        System.getProperty("fs.hdfs.impl.disable.cache", "true"));
 
     HdfsUnderFileSystemUtils.addKey(hadoopConf, PropertyKey.UNDERFS_HDFS_CONFIGURATION);
   }
@@ -130,22 +137,24 @@ public class HdfsUnderFileSystem extends UnderFileSystem {
   }
 
   @Override
-  public FSDataOutputStream create(String path) throws IOException {
-    return create(path, new CreateOptions());
+  public OutputStream create(String path, CreateOptions options) throws IOException {
+    if (!options.isEnsureAtomic()) {
+      return createDirect(path, options);
+    }
+    return new AtomicFileOutputStream(path, this, options);
   }
 
   @Override
-  public FSDataOutputStream create(String path, CreateOptions options)
-      throws IOException {
+  public OutputStream createDirect(String path, CreateOptions options) throws IOException {
     IOException te = null;
     RetryPolicy retryPolicy = new CountingRetry(MAX_TRY);
-    Permission perm = options.getPermission();
     while (retryPolicy.attemptRetry()) {
       try {
-        LOG.debug("Creating HDFS file at {} with perm {}", path, perm.toString());
+        LOG.debug("Creating HDFS file at {} with owner {}, group {}, mode {}", path,
+            options.getOwner(), options.getGroup(), options.getMode());
         // TODO(chaomin): support creating HDFS files with specified block size and replication.
         return FileSystem.create(mFileSystem, new Path(path),
-            new FsPermission(perm.getMode().toShort()));
+            new FsPermission(options.getMode().toShort()));
       } catch (IOException e) {
         LOG.error("Retry count {} : {} ", retryPolicy.getRetryCount(), e.getMessage(), e);
         te = e;
@@ -155,35 +164,18 @@ public class HdfsUnderFileSystem extends UnderFileSystem {
   }
 
   @Override
-  public boolean delete(String path, boolean recursive) throws IOException {
-    LOG.debug("deleting {} {}", path, recursive);
-    IOException te = null;
-    RetryPolicy retryPolicy = new CountingRetry(MAX_TRY);
-    while (retryPolicy.attemptRetry()) {
-      try {
-        return mFileSystem.delete(new Path(path), recursive);
-      } catch (IOException e) {
-        LOG.error("Retry count {} : {}", retryPolicy.getRetryCount(), e.getMessage(), e);
-        te = e;
-      }
-    }
-    throw te;
+  public boolean deleteDirectory(String path, DeleteOptions options) throws IOException {
+    return isDirectory(path) && delete(path, options.isRecursive());
+  }
+
+  @Override
+  public boolean deleteFile(String path) throws IOException {
+    return isFile(path) && delete(path, false);
   }
 
   @Override
   public boolean exists(String path) throws IOException {
-    IOException te = null;
-    RetryPolicy retryPolicy = new CountingRetry(MAX_TRY);
-    while (retryPolicy.attemptRetry()) {
-      try {
-        return mFileSystem.exists(new Path(path));
-      } catch (IOException e) {
-        LOG.error("{} try to check if {} exists : {}", retryPolicy.getRetryCount(), path,
-            e.getMessage(), e);
-        te = e;
-      }
-    }
-    throw te;
+    return mFileSystem.exists(new Path(path));
   }
 
   @Override
@@ -203,15 +195,22 @@ public class HdfsUnderFileSystem extends UnderFileSystem {
 
   @Override
   public List<String> getFileLocations(String path) throws IOException {
-    return getFileLocations(path, 0);
+    return getFileLocations(path, FileLocationOptions.defaults());
   }
 
   @Override
-  public List<String> getFileLocations(String path, long offset) throws IOException {
+  public List<String> getFileLocations(String path, FileLocationOptions options)
+      throws IOException {
+    // If the user has hinted the underlying storage nodes are not co-located with Alluxio
+    // workers, short circuit without querying the locations
+    if (Configuration.getBoolean(PropertyKey.UNDERFS_HDFS_REMOTE)) {
+      return null;
+    }
     List<String> ret = new ArrayList<>();
     try {
       FileStatus fStatus = mFileSystem.getFileStatus(new Path(path));
-      BlockLocation[] bLocations = mFileSystem.getFileBlockLocations(fStatus, offset, 1);
+      BlockLocation[] bLocations =
+          mFileSystem.getFileBlockLocations(fStatus, options.getOffset(), 1);
       if (bLocations.length > 0) {
         String[] names = bLocations[0].getHosts();
         Collections.addAll(ret, names);
@@ -274,29 +273,28 @@ public class HdfsUnderFileSystem extends UnderFileSystem {
   }
 
   @Override
+  public boolean isDirectory(String path) throws IOException {
+    return mFileSystem.isDirectory(new Path(path));
+  }
+
+  @Override
   public boolean isFile(String path) throws IOException {
     return mFileSystem.isFile(new Path(path));
   }
 
   @Override
-  public String[] list(String path) throws IOException {
-    FileStatus[] files;
-    try {
-      files = mFileSystem.listStatus(new Path(path));
-    } catch (FileNotFoundException e) {
+  public UnderFileStatus[] listStatus(String path) throws IOException {
+    FileStatus[] files = listStatusInternal(path);
+    if (files == null) {
       return null;
     }
-    if (files != null && !isFile(path)) {
-      String[] rtn = new String[files.length];
-      int i = 0;
-      for (FileStatus status : files) {
-        // only return the relative path, to keep consistent with java.io.File.list()
-        rtn[i++] =  status.getPath().getName();
-      }
-      return rtn;
-    } else {
-      return null;
+    UnderFileStatus[] rtn = new UnderFileStatus[files.length];
+    int i = 0;
+    for (FileStatus status : files) {
+      // only return the relative path, to keep consistent with java.io.File.list()
+      rtn[i++] =  new UnderFileStatus(status.getPath().getName(), status.isDir());
     }
+    return rtn;
   }
 
   @Override
@@ -334,11 +332,6 @@ public class HdfsUnderFileSystem extends UnderFileSystem {
   }
 
   @Override
-  public boolean mkdirs(String path, boolean createParent) throws IOException {
-    return mkdirs(path, new MkdirsOptions().setCreateParent(createParent));
-  }
-
-  @Override
   public boolean mkdirs(String path, MkdirsOptions options) throws IOException {
     IOException te = null;
     RetryPolicy retryPolicy = new CountingRetry(MAX_TRY);
@@ -359,9 +352,18 @@ public class HdfsUnderFileSystem extends UnderFileSystem {
           parent = parent.getParent();
         }
         while (!dirsToMake.empty()) {
-          if (!FileSystem.mkdirs(mFileSystem, dirsToMake.pop(),
-              new FsPermission(options.getPermission().getMode().toShort()))) {
+          Path dirToMake = dirsToMake.pop();
+          if (!FileSystem.mkdirs(mFileSystem, dirToMake,
+              new FsPermission(options.getMode().toShort()))) {
             return false;
+          }
+          // Set the owner to the Alluxio client user to achieve permission delegation.
+          // Alluxio server-side user is required to be a HDFS superuser. If it fails to set owner,
+          // proceeds with mkdirs and print out an warning message.
+          try {
+            setOwner(dirToMake.toString(), options.getOwner(), options.getGroup());
+          } catch (IOException e) {
+            LOG.warn("Failed to update the ufs dir ownership, default values will be used. " + e);
           }
         }
         return true;
@@ -375,12 +377,19 @@ public class HdfsUnderFileSystem extends UnderFileSystem {
   }
 
   @Override
-  public FSDataInputStream open(String path) throws IOException {
+  public InputStream open(String path, OpenOptions options) throws IOException {
     IOException te = null;
     RetryPolicy retryPolicy = new CountingRetry(MAX_TRY);
     while (retryPolicy.attemptRetry()) {
       try {
-        return mFileSystem.open(new Path(path));
+        FSDataInputStream inputStream = mFileSystem.open(new Path(path));
+        try {
+          inputStream.seek(options.getOffset());
+        } catch (IOException e) {
+          inputStream.close();
+          throw e;
+        }
+        return new HdfsUnderFileInputStream(inputStream);
       } catch (IOException e) {
         LOG.error("{} try to open {} : {}", retryPolicy.getRetryCount(), path, e.getMessage(), e);
         te = e;
@@ -390,30 +399,24 @@ public class HdfsUnderFileSystem extends UnderFileSystem {
   }
 
   @Override
-  public boolean rename(String src, String dst) throws IOException {
-    LOG.debug("Renaming from {} to {}", src, dst);
-    if (!exists(src)) {
-      LOG.error("File {} does not exist. Therefore rename to {} failed.", src, dst);
+  public boolean renameDirectory(String src, String dst) throws IOException {
+    LOG.debug("Renaming directory from {} to {}", src, dst);
+    if (!isDirectory(src)) {
+      LOG.error("Unable to rename {} to {} because source does not exist or is a file", src, dst);
       return false;
     }
+    return rename(src, dst);
+  }
 
-    if (exists(dst)) {
-      LOG.error("File {} does exist. Therefore rename from {} failed.", dst, src);
+  @Override
+  public boolean renameFile(String src, String dst) throws IOException {
+    if (!isFile(src)) {
+      LOG.error("Unable to rename {} to {} because source does not exist or is a directory",
+          src, dst);
       return false;
     }
-
-    IOException te = null;
-    RetryPolicy retryPolicy = new CountingRetry(MAX_TRY);
-    while (retryPolicy.attemptRetry()) {
-      try {
-        return mFileSystem.rename(new Path(src), new Path(dst));
-      } catch (IOException e) {
-        LOG.error("{} try to rename {} to {} : {}", retryPolicy.getRetryCount(), src, dst,
-            e.getMessage(), e);
-        te = e;
-      }
-    }
-    throw te;
+    LOG.debug("Renaming file from {} to {}", src, dst);
+    return rename(src, dst);
   }
 
   @Override
@@ -425,14 +428,19 @@ public class HdfsUnderFileSystem extends UnderFileSystem {
   public void setOwner(String path, String user, String group) throws IOException {
     try {
       FileStatus fileStatus = mFileSystem.getFileStatus(new Path(path));
-      LOG.info("Changing file '{}' user from: {} to {}, group from: {} to {}", fileStatus.getPath(),
-          fileStatus.getOwner(), user, fileStatus.getGroup(), group);
+      LOG.debug("Changing file '{}' user from: {} to {}, group from: {} to {}",
+          fileStatus.getPath(), fileStatus.getOwner(), user, fileStatus.getGroup(), group);
       mFileSystem.setOwner(fileStatus.getPath(), user, group);
     } catch (IOException e) {
       LOG.error("Fail to set owner for {} with user: {}, group: {}", path, user, group, e);
-      LOG.warn("In order for Alluxio to create HDFS files with the correct user and groups, "
+      LOG.warn("In order for Alluxio to set HDFS files with the correct user and groups, "
           + "Alluxio should be added to the HDFS superusers.");
-      throw e;
+      if (!Configuration.getBoolean(PropertyKey.UNDERFS_ALLOW_SET_OWNER_FAILURE)) {
+        throw e;
+      } else {
+        LOG.warn("Proceeding... but this may cause permission inconsistency between Alluxio and "
+            + "HDFS.");
+      }
     }
   }
 
@@ -440,7 +448,7 @@ public class HdfsUnderFileSystem extends UnderFileSystem {
   public void setMode(String path, short mode) throws IOException {
     try {
       FileStatus fileStatus = mFileSystem.getFileStatus(new Path(path));
-      LOG.info("Changing file '{}' permissions from: {} to {}", fileStatus.getPath(),
+      LOG.debug("Changing file '{}' permissions from: {} to {}", fileStatus.getPath(),
           fileStatus.getPermission(), mode);
       mFileSystem.setPermission(fileStatus.getPath(), new FsPermission(mode));
     } catch (IOException e) {
@@ -479,4 +487,76 @@ public class HdfsUnderFileSystem extends UnderFileSystem {
     }
   }
 
+  @Override
+  public boolean supportsFlush() {
+    return true;
+  }
+
+  /**
+   * Delete a file or directory at path.
+   *
+   * @param path file or directory path
+   * @param recursive whether to delete path recursively
+   * @return true, if succeed
+   * @throws IOException when a non-alluxio error occurs
+   */
+  private boolean delete(String path, boolean recursive) throws IOException {
+    LOG.debug("deleting {} {}", path, recursive);
+    IOException te = null;
+    RetryPolicy retryPolicy = new CountingRetry(MAX_TRY);
+    while (retryPolicy.attemptRetry()) {
+      try {
+        return mFileSystem.delete(new Path(path), recursive);
+      } catch (IOException e) {
+        LOG.error("Retry count {} : {}", retryPolicy.getRetryCount(), e.getMessage(), e);
+        te = e;
+      }
+    }
+    throw te;
+  }
+
+  /**
+   * List status for given path. Returns an array of {@link FileStatus} with an entry for each file
+   * and directory in the directory denoted by this path.
+   *
+   * @param path the pathname to list
+   * @return {@code null} if the path is not a directory
+   * @throws IOException
+   */
+  private FileStatus[] listStatusInternal(String path) throws IOException {
+    FileStatus[] files;
+    try {
+      files = mFileSystem.listStatus(new Path(path));
+    } catch (FileNotFoundException e) {
+      return null;
+    }
+    // Check if path is a file
+    if (files != null && files.length == 1 && files[0].getPath().toString().equals(path)) {
+      return null;
+    }
+    return files;
+  }
+
+  /**
+   * Rename a file or folder to a file or folder.
+   *
+   * @param src path of source file or directory
+   * @param dst path of destination file or directory
+   * @return true if rename succeeds
+   * @throws IOException
+   */
+  private boolean rename(String src, String dst) throws IOException {
+    IOException te = null;
+    RetryPolicy retryPolicy = new CountingRetry(MAX_TRY);
+    while (retryPolicy.attemptRetry()) {
+      try {
+        return mFileSystem.rename(new Path(src), new Path(dst));
+      } catch (IOException e) {
+        LOG.error("{} try to rename {} to {} : {}", retryPolicy.getRetryCount(), src, dst,
+            e.getMessage(), e);
+        te = e;
+      }
+    }
+    throw te;
+  }
 }

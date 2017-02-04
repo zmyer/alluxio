@@ -14,6 +14,8 @@ package alluxio;
 import alluxio.client.file.FileSystemMasterClient;
 import alluxio.heartbeat.HeartbeatContext;
 import alluxio.heartbeat.HeartbeatScheduler;
+import alluxio.util.CommonUtils;
+import alluxio.util.WaitForOptions;
 import alluxio.worker.block.BlockHeartbeatReporter;
 import alluxio.worker.block.BlockWorker;
 
@@ -23,14 +25,11 @@ import org.powermock.reflect.Whitebox;
 
 import java.util.Arrays;
 import java.util.List;
-import java.util.Random;
-import java.util.concurrent.TimeUnit;
 
 /**
  * Util methods for writing integration tests.
  */
 public final class IntegrationTestUtils {
-
   /**
    * Convenience method for calling
    * {@link #waitForPersist(LocalAlluxioClusterResource, AlluxioURI, int)} with a default timeout.
@@ -53,9 +52,9 @@ public final class IntegrationTestUtils {
   public static void waitForPersist(final LocalAlluxioClusterResource localAlluxioClusterResource,
       final AlluxioURI uri, int timeoutMs) {
 
-    try (FileSystemMasterClient client = new FileSystemMasterClient(
+    try (FileSystemMasterClient client = new FileSystemMasterClient(null,
         localAlluxioClusterResource.get().getMaster().getAddress())) {
-      CommonTestUtils.waitFor(uri + " to be persisted", new Function<Void, Boolean>() {
+      CommonUtils.waitFor(uri + " to be persisted", new Function<Void, Boolean>() {
         @Override
         public Boolean apply(Void input) {
           try {
@@ -64,21 +63,8 @@ public final class IntegrationTestUtils {
             throw Throwables.propagate(e);
           }
         }
-      }, timeoutMs);
+      }, WaitForOptions.defaults().setTimeout(timeoutMs));
     }
-  }
-
-  /**
-   * @return a random sequence of characters from 'a' to 'z' of random length up to 100 characters
-   */
-  public static String randomString() {
-    Random random = new Random();
-    int length = random.nextInt(100) + 1;
-    StringBuilder sb = new StringBuilder();
-    for (int i = 0; i < length; i++) {
-      sb.append((char) (random.nextInt(26) + 97));
-    }
-    return sb.toString();
   }
 
   /**
@@ -91,27 +77,22 @@ public final class IntegrationTestUtils {
    */
   public static void waitForBlocksToBeFreed(final BlockWorker bw, final Long... blockIds) {
     try {
-      // Schedule 1st heartbeat from worker.
-      HeartbeatScheduler.await(HeartbeatContext.WORKER_BLOCK_SYNC, 5, TimeUnit.SECONDS);
-      HeartbeatScheduler.schedule(HeartbeatContext.WORKER_BLOCK_SYNC);
+      // Execute 1st heartbeat from worker.
+      HeartbeatScheduler.execute(HeartbeatContext.WORKER_BLOCK_SYNC);
 
       // Waiting for the blocks to be added into the heartbeat reportor, so that they will be
       // removed from master in the next heartbeat.
-      CommonTestUtils.waitFor("blocks to be removed", new Function<Void, Boolean>() {
+      CommonUtils.waitFor("blocks to be removed", new Function<Void, Boolean>() {
         @Override
         public Boolean apply(Void input) {
           BlockHeartbeatReporter reporter = Whitebox.getInternalState(bw, "mHeartbeatReporter");
           List<Long> blocksToRemove = Whitebox.getInternalState(reporter, "mRemovedBlocks");
           return blocksToRemove.containsAll(Arrays.asList(blockIds));
         }
-      }, 100 * Constants.SECOND_MS);
+      }, WaitForOptions.defaults().setTimeout(100 * Constants.SECOND_MS));
 
-      // Schedule 2nd heartbeat from worker.
-      HeartbeatScheduler.await(HeartbeatContext.WORKER_BLOCK_SYNC, 5, TimeUnit.SECONDS);
-      HeartbeatScheduler.schedule(HeartbeatContext.WORKER_BLOCK_SYNC);
-
-      // Ensure the 2nd heartbeat is finished.
-      HeartbeatScheduler.await(HeartbeatContext.WORKER_BLOCK_SYNC, 5, TimeUnit.SECONDS);
+      // Execute 2nd heartbeat from worker.
+      HeartbeatScheduler.execute(HeartbeatContext.WORKER_BLOCK_SYNC);
     } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
       throw new RuntimeException(e);

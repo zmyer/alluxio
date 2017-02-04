@@ -48,7 +48,7 @@ should have the final escaped parameters (cat /\\*).
     <tr>
       <td>{{ item.operation }}</td>
       <td>{{ item.syntax }}</td>
-      <td>{{ site.data.table.en.operation-command.[item.operation] }}</td>
+      <td>{{ site.data.table.en.operation-command[item.operation] }}</td>
     </tr>
   {% endfor %}
 </table>
@@ -65,8 +65,23 @@ output:
 
 {% include Command-Line-Interface/cat.md %}
 
+## checkConsistency
+The `checkConsistency` command compares Alluxio and under storage metadata for a given path. If the
+path is a directory, the entire subtree will be compared. The command returns a message listing each
+inconsistent file or directory. The system administrator should reconcile the differences of these
+files at their discretion. To avoid metadata inconsistencies between Alluxio and under storages,
+design your systems to modify files and directories through the Alluxio and avoid directly modifying
+state in the underlying storage.
+
+NOTE: This command requires a read lock on the subtree being checked, meaning writes and updates
+to files or directories in the subtree cannot be completed until this command completes.
+
+For example, `checkConsistency` can be used to periodically validate the integrity of the namespace.
+
+{% include Command-Line-Interface/checkConsistency.md %}
+
 ## checksum
-The `checksum` command outputs the md5 value of a file in Alluxio. 
+The `checksum` command outputs the md5 value of a file in Alluxio.
 
 For example, `checksum` can be used to verify the content of a file stored in Alluxio
 matches the content stored in an UnderFS or local filesystem:
@@ -120,8 +135,8 @@ For example, `chown` can be used as a quick way to change the owner of file:
 ## copyFromLocal
 The `copyFromLocal` command copies the contents of a file in your local file system into Alluxio.
 If the node you run the command from has an Alluxio worker, the data will be available on that
-worker. Otherwise, the data will be placed in a random remote node running an Alluxio worker. If a
-directory is specified, the directory and all its contents will be uploaded recursively.
+worker. Otherwise, the data will be copied to a random remote node running an Alluxio worker. If a
+directory is specified, the directory and all its contents will be copied recursively.
 
 For example, `copyFromLocal` can be used as a quick way to inject data into the system for
 processing:
@@ -140,8 +155,8 @@ investigation or debugging.
 
 ## count
 The `count` command outputs the number of files and folders matching a prefix as well as the
-total size of the files. `Count` works recursively and accounts for any nested directories and
-files. `Count` is best utilized when the user has some predefined naming conventions for their
+total size of the files. `count` works recursively and accounts for any nested directories and
+files. `count` is best utilized when the user has some predefined naming conventions for their
 files.
 
 For example, if data files are stored by their date, `count` can be used to determine the number of
@@ -169,9 +184,12 @@ which folders are taking up the most space.
 {% include Command-Line-Interface/du.md %}
 
 ## fileInfo
-The `fileInfo` command dumps the FileInfo representation of a file to the console. It is primarily
-intended to assist powerusers in debugging their system. Generally viewing the file info in the UI
-will be much easier to understand.
+The `fileInfo` command is deprecated since Alluxio version 1.5.
+Please use `alluxio fs stat <path>` command instead.
+
+The `fileInfo` command dumps the FileInfo representation of a file to the console.
+It is primarily intended to assist powerusers in debugging their system. Generally viewing the file
+info in the UI will be much easier to understand.
 
 For example, `fileInfo` can be used to debug the block locations of a file. This is useful when
 trying to achieve locality for compute workloads.
@@ -183,8 +201,10 @@ The `free` command sends a request to the master to evict all blocks of a file f
 workers. If the argument to `free` is a directory, it will recursively `free` all files. This
 request is not guaranteed to take effect immediately, as readers may be currently using the blocks
 of the file. `Free` will return immediately after the request is acknowledged by the master. Note
-that `free` does not delete any data from the under storage system, and only affects data stored in
-Alluxio space. In addition, metadata will not be affected by this operation, meaning the freed file
+that, files must be persisted already in under storage before being freed, or the `free` command will fail;
+also any pinned files cannot be freed unless `-f` option is specified. The `free` command
+does not delete any data from the under storage system, but only removing the blocks of those files in
+Alluxio space to reclaim space. In addition, metadata will not be affected by this operation, meaning the freed file
 will still show up if an `ls` command is run.
 
 For example, `free` can be used to manually manage Alluxio's data caching.
@@ -338,14 +358,28 @@ For example, `rm` can be used to remove temporary files which are no longer need
 {% include Command-Line-Interface/rm2.md %}
 
 ## setTtl
-The `setTtl` command sets the time-to-live of a file, in milliseconds. The file will automatically
-be deleted once the current time is greater than the TTL + creation time of the file. This delete
-will affect both Alluxio and the under storage system.
+The `setTtl` command sets the time-to-live of a file or a directory, in milliseconds. If set ttl
+to a directory, all the children inside that directory will set too. So a directory's TTL expires,
+all the children inside that directory will also expire. Action parameter will indicate the action
+to perform once the current time is greater than the TTL + creation time of the file.
+Action `delete` (default) will delete file or directory from both Alluxio and the under storage system,
+whereas action `free` will just free the file from Alluxio even they are pinned.
 
-For example, `setTtl` can be used to clean up files the administrator knows are unnecessary after a
-period of time.
+For example, `setTtl` with action `delete` can be used to clean up files the administrator knows are
+unnecessary after a period of time, or with action `free` just remove the contents from Alluxio to
+make room for more space in Alluxio.
 
 {% include Command-Line-Interface/setTtl.md %}
+
+## stat
+The `stat` command dumps the FileInfo representation of a file or a directory to the console.
+It is primarily intended to assist powerusers in debugging their system. Generally viewing the file
+info in the UI will be much easier to understand.
+
+For example, `stat` can be used to debug the block locations of a file. This is useful when
+trying to achieve locality for compute workloads.
+
+{% include Command-Line-Interface/stat.md %}
 
 ## tail
 The `tail` command outputs the last 1 kb of data in a file to the console.

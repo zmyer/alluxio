@@ -20,12 +20,21 @@ perform basic tasks with the data in Alluxio. During this guide, you will:
 you will be able to perform additional tasks in this guide. Sections of the guide which require
 your AWS account information will be labeled with **[Bonus]**.
 
+**Note**  This guide is meant for you to quickly start interacting with an Alluxio system. Alluxio
+performs best in a distributed environment for big data workloads. Both of these qualities are
+difficult to incorporate in a local environment. If you are interested in running a larger scale
+example which highlights the performance benefits of Alluxio, try out the instructions in either of
+these two whitepapers: [Accelerating on-demand data analytics with
+Alluxio](https://alluxio.com/resources/accelerating-on-demand-data-analytics-with-alluxio),
+[Accelerating data analytics on ceph object storage with Alluxio](https://www.alluxio.com/resources
+/accelerating-data-analytics-on-ceph-object-storage-with-alluxio).
+
 ## Prerequisites
 
 For the following quick start guide, you will need:
 
 * Mac OS X or Linux
-* Java 7 or newer
+* [Java 7 or newer](Java-Setup.html)
 * **[Bonus]** AWS account and keys
 
 ### Setup SSH (Mac OS X)
@@ -65,7 +74,7 @@ $ ./bin/alluxio bootstrapConf localhost
 
 If you have an Amazon AWS account with your access key id and secret key, you can update your
 Alluxio configuration now in preparation for interacting with Amazon S3 later in this guide. Add
-your AWS access information to the Alluxio configuration by adding to the
+your AWS access information to the Alluxio configuration by adding the keys to the
 `conf/alluxio-site.properties` file. The following commands will update the configuration.
 
 ```bash
@@ -108,10 +117,9 @@ for interacting with Alluxio. You can invoke the Alluxio shell with the followin
 $ ./bin/alluxio fs
 ```
 
-This will print out the Alluxio command-line operations available.
+This will print out the available Alluxio command-line operations.
 
-You can list files in Alluxio with the `ls` command. List the files in the root directory with the
-following command:
+For example, you can list files in Alluxio with the `ls` command. To list all files in the root directory, use the following command:
 
 ```bash
 $ ./bin/alluxio fs ls /
@@ -156,8 +164,8 @@ default path for the UFS is `./underFSStorage`. We can see what is in the UFS wi
 $ ls ./underFSStorage/
 ```
 
-However, the directory doesn't exist! This is because by default, Alluxio will write data into
-Alluxio space only, and not to the UFS.
+However, the directory doesn't exist! By default, Alluxio will write data only into
+Alluxio space, not to the UFS.
 
 However, we can tell Alluxio to persist the file from Alluxio space to the UFS. The shell command
 `persist` will do just that.
@@ -364,6 +372,7 @@ There are many Under storage systems that can be accessed through Alluxio.
 * [Alluxio with Swift](Configuring-Alluxio-with-Swift.html)
 * [Alluxio with GlusterFS](Configuring-Alluxio-with-GlusterFS.html)
 * [Alluxio with HDFS](Configuring-Alluxio-with-HDFS.html)
+* [Alluxio with MapR-FS](Configuring-Alluxio-with-MapR-FS.html)
 * [Alluxio with Secure HDFS](Configuring-Alluxio-with-secure-HDFS.html)
 * [Alluxio with OSS](Configuring-Alluxio-with-OSS.html)
 * [Alluxio with NFS](Configuring-Alluxio-with-NFS.html)
@@ -376,3 +385,4 @@ Different frameworks and applications work with Alluxio.
 * [Apache Hadoop MapReduce with Alluxio](Running-Hadoop-MapReduce-on-Alluxio.html)
 * [Apache Flink with Alluxio](Running-Flink-on-Alluxio.html)
 * [Apache Zeppelin with Alluxio](Accessing-Alluxio-from-Zeppelin.html)
+* [Apache HBase with Alluxio](Running-HBase-on-Alluxio.html)

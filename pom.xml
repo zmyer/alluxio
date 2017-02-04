@@ -16,7 +16,7 @@
   <modelVersion>4.0.0</modelVersion>
   <groupId>org.alluxio</groupId>
   <artifactId>alluxio-parent</artifactId>
-  <version>1.3.0-SNAPSHOT</version>
+  <version>1.5.0-SNAPSHOT</version>
   <packaging>pom</packaging>
   <name>Alluxio Parent</name>
   <description>Parent POM of Alluxio project: a Memory-Speed Virtual Distributed Storage System</description>
@@ -142,26 +142,30 @@
   <properties>
     <apache.curator.version>2.1.0-incubating</apache.curator.version>
     <aws.amazonaws.version>1.11.7</aws.amazonaws.version>
+    <build.path>build</build.path>
     <checkstyle.path>build/checkstyle/</checkstyle.path>
     <cxf.version>2.7.0</cxf.version>
     <findbugs.path>build/findbugs</findbugs.path>
     <glusterfs-hadoop.version>2.3.13</glusterfs-hadoop.version>
+    <gmetric4j.version>1.0.7</gmetric4j.version>
     <hadoop.version>2.2.0</hadoop.version>
+    <hadoop-openstack.version>2.6.0</hadoop-openstack.version>
+    <jackson.version>1.9.7</jackson.version>
     <java.version>1.7</java.version>
     <jersey.version>2.22</jersey.version>
-    <jetty.version>7.6.15.v20140411</jetty.version>
+    <jetty.version>9.2.16.v20160414</jetty.version>
     <junit.version>4.12</junit.version>
     <libthrift.version>0.9.3</libthrift.version>
     <license.header.path>build/license/</license.header.path>
-    <build.path>build</build.path>
     <log4j.version>1.2.17</log4j.version>
     <metrics.version>3.1.2</metrics.version>
     <powermock.version>1.6.1</powermock.version>
+    <protobuf.version>2.5.0</protobuf.version>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <slf4j.version>1.7.2</slf4j.version>
-    <test.output.redirect>true</test.output.redirect>
-    <hadoop-openstack.version>2.6.0</hadoop-openstack.version>
+    <surefire.forkCount>2</surefire.forkCount>
     <surefire.useSystemClassLoader>true</surefire.useSystemClassLoader>
+    <test.output.redirect>true</test.output.redirect>
   </properties>
 
   <modules>
@@ -185,6 +189,11 @@
         <version>14.0.1</version>
       </dependency>
       <dependency>
+        <groupId>com.google.protobuf</groupId>
+        <artifactId>protobuf-java</artifactId>
+        <version>${protobuf.version}</version>
+      </dependency>
+      <dependency>
         <groupId>org.apache.commons</groupId>
         <artifactId>commons-lang3</artifactId>
         <version>3.4</version>
@@ -195,9 +204,20 @@
         <version>1.10</version>
       </dependency>
       <dependency>
+        <groupId>io.netty</groupId>
+        <artifactId>netty-all</artifactId>
+        <version>4.0.29.Final</version>
+      </dependency>
+      <dependency>
         <groupId>org.apache.mesos</groupId>
         <artifactId>mesos</artifactId>
         <version>0.23.0</version>
+        <exclusions>
+          <exclusion>
+            <groupId>com.google.protobuf</groupId>
+            <artifactId>protobuf-java</artifactId>
+          </exclusion>
+        </exclusions>
       </dependency>
       <dependency>
         <groupId>org.apache.hadoop</groupId>
@@ -215,6 +235,10 @@
           <exclusion>
             <groupId>com.google.guava</groupId>
             <artifactId>guava</artifactId>
+          </exclusion>
+          <exclusion>
+            <groupId>javax.servlet.jsp</groupId>
+            <artifactId>jsp-api</artifactId>
           </exclusion>
         </exclusions>
       </dependency>
@@ -253,6 +277,11 @@
         <groupId>org.slf4j</groupId>
         <artifactId>slf4j-log4j12</artifactId>
         <version>${slf4j.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.beust</groupId>
+        <artifactId>jcommander</artifactId>
+        <version>1.48</version>
       </dependency>
 
       <!-- Test Dependencies -->
@@ -353,12 +382,16 @@
         <plugin>
           <groupId>org.apache.maven.plugins</groupId>
           <artifactId>maven-surefire-plugin</artifactId>
-          <version>2.14</version>
+          <version>2.19.1</version>
           <configuration>
             <argLine>-Djava.net.preferIPv4Stack=true -XX:MaxPermSize=512M</argLine>
+            <forkCount>${surefire.forkCount}</forkCount>
             <redirectTestOutputToFile>${test.output.redirect}</redirectTestOutputToFile>
-            <!-- Alphabetical order on even hours, reverse-alphabetical on odd hours  -->
-            <runOrder>hourly</runOrder>
+            <reuseForks>false</reuseForks>
+            <runOrder>alphabetical</runOrder>
+            <systemPropertyVariables>
+              <alluxio.test.mode>true</alluxio.test.mode>
+            </systemPropertyVariables>
             <useSystemClassLoader>${surefire.useSystemClassLoader}</useSystemClassLoader>
           </configuration>
         </plugin>
@@ -547,6 +580,9 @@
 
             <!-- Build and Packaging Exclusions -->
             <exclude>build/**/*</exclude>
+            <exclude>conf/alluxio-site.properties</exclude>
+            <exclude>dev/scripts/tarballs/**/*</exclude>
+            <exclude>dev/scripts/workdir/**/*</exclude>
             <exclude>**/.checkstyle</exclude>
             <exclude>**/src/main/assembly/*</exclude>
 

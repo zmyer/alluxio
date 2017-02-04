@@ -22,11 +22,11 @@ Alluxio直接兼容Spark 1.1或更新版本而无需修改.
 
 {% include Running-Spark-on-Alluxio/spark-profile-build.md %}
 
-* 请添加如下代码到`spark/conf/spark-env.sh`。
+* 请添加如下代码到`spark/conf/spark-defaults.conf`。
 
 {% include Running-Spark-on-Alluxio/earlier-spark-version-bash.md %}
 
-###针对HDFS的额外设置
+### 针对HDFS的额外设置
 
 * 如果Alluxio运行Hadoop 1.x集群之上，创建一个新文件`spark/conf/core-site.xml`包含以下内容：
 
@@ -37,7 +37,7 @@ Alluxio直接兼容Spark 1.1或更新版本而无需修改.
 
 {% include Running-Spark-on-Alluxio/fault-tolerant-mode-with-zookeeper-xml.md %}
 
-以及如下内容到`spark/conf/spark-env.sh`:
+以及如下内容到`spark/conf/spark-defaults.conf`:
 
 {% include Running-Spark-on-Alluxio/fault-tolerant-mode-with-zookeeper-bash.md %}
 

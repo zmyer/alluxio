@@ -22,20 +22,16 @@ import alluxio.Configuration;
 import alluxio.ConfigurationTestUtils;
 import alluxio.Constants;
 import alluxio.PropertyKey;
+import alluxio.PropertyKeyFormat;
 import alluxio.Sessions;
 import alluxio.exception.BlockAlreadyExistsException;
 import alluxio.underfs.UnderFileSystem;
 import alluxio.util.io.PathUtils;
-import alluxio.worker.WorkerContext;
-import alluxio.worker.WorkerIdRegistry;
-import alluxio.worker.WorkerSource;
-import alluxio.worker.WorkerTestUtils;
 import alluxio.worker.block.meta.BlockMeta;
 import alluxio.worker.block.meta.StorageDir;
 import alluxio.worker.block.meta.TempBlockMeta;
 import alluxio.worker.file.FileSystemMasterClient;
 
-import com.codahale.metrics.Counter;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Rule;
@@ -48,13 +44,11 @@ import org.powermock.core.classloader.annotations.PrepareForTest;
 import org.powermock.modules.junit4.PowerMockRunner;
 
 import java.io.IOException;
-import java.util.Arrays;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.List;
 import java.util.Random;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Unit tests for {@link DefaultBlockWorker}.
@@ -63,7 +57,7 @@ import java.util.Set;
 @PrepareForTest({BlockMasterClient.class, FileSystemMasterClient.class,
     BlockHeartbeatReporter.class, BlockMetricsReporter.class, BlockMeta.class,
     BlockStoreLocation.class, BlockStoreMeta.class, StorageDir.class, Configuration.class,
-    UnderFileSystem.class, BlockWorker.class, WorkerIdRegistry.class, Sessions.class})
+    UnderFileSystem.class, BlockWorker.class, Sessions.class})
 public class BlockWorkerTest {
 
   /** Rule to create a new temporary folder during each test. */
@@ -82,19 +76,26 @@ public class BlockWorkerTest {
    */
   @Before
   public void before() throws IOException {
-    WorkerTestUtils.resetWorkerSource();
     mRandom = new Random();
     mBlockMasterClient = PowerMockito.mock(BlockMasterClient.class);
     mBlockStore = PowerMockito.mock(BlockStore.class);
     mFileSystemMasterClient = PowerMockito.mock(FileSystemMasterClient.class);
     mSessions = PowerMockito.mock(Sessions.class);
 
+    Configuration.set(PropertyKey.WORKER_TIERED_STORE_LEVELS, "2");
+
+    Configuration.set(PropertyKeyFormat.WORKER_TIERED_STORE_LEVEL_DIRS_QUOTA_FORMAT.format(1),
+        String.valueOf(Constants.GB));
     Configuration.set(PropertyKey.WORKER_TIERED_STORE_LEVEL0_DIRS_PATH,
         mFolder.newFolder().getAbsolutePath());
     Configuration.set(PropertyKey.WORKER_DATA_PORT, Integer.toString(0));
 
-    mBlockWorker =
-        new DefaultBlockWorker(mBlockMasterClient, mFileSystemMasterClient, mSessions, mBlockStore);
+    Configuration.set(PropertyKey.WORKER_TIERED_STORE_LEVEL1_ALIAS, "HDD");
+    Configuration.set(PropertyKey.WORKER_TIERED_STORE_LEVEL1_DIRS_PATH,
+        mFolder.newFolder().getAbsolutePath());
+
+    mBlockWorker = new DefaultBlockWorker(mBlockMasterClient, mFileSystemMasterClient, mSessions,
+        mBlockStore, new AtomicReference<>(10L));
   }
 
   /**
@@ -200,6 +201,29 @@ public class BlockWorkerTest {
     long initialBytes = mRandom.nextLong();
     long sessionId = mRandom.nextLong();
     String tierAlias = "MEM";
+    BlockStoreLocation location = BlockStoreLocation.anyDirInTier(tierAlias);
+    StorageDir storageDir = Mockito.mock(StorageDir.class);
+    TempBlockMeta meta = new TempBlockMeta(sessionId, blockId, initialBytes, storageDir);
+
+    when(mBlockStore.createBlockMeta(sessionId, blockId, location, initialBytes))
+        .thenReturn(meta);
+    when(storageDir.getDirPath()).thenReturn("/tmp");
+    assertEquals(
+        PathUtils.concatPath("/tmp", ".tmp_blocks", sessionId % 1024,
+            String.format("%x-%x", sessionId, blockId)),
+        mBlockWorker.createBlock(sessionId, blockId, tierAlias, initialBytes));
+  }
+
+  /**
+   * Tests the {@link BlockWorker#createBlock(long, long, String, long)} method with a tier
+   * other than MEM.
+   */
+  @Test
+  public void createBlockLowerTier() throws Exception {
+    long blockId = mRandom.nextLong();
+    long initialBytes = mRandom.nextLong();
+    long sessionId = mRandom.nextLong();
+    String tierAlias = "HDD";
     BlockStoreLocation location = BlockStoreLocation.anyDirInTier(tierAlias);
     StorageDir storageDir = Mockito.mock(StorageDir.class);
     TempBlockMeta meta = new TempBlockMeta(sessionId, blockId, initialBytes, storageDir);
@@ -436,21 +460,14 @@ public class BlockWorkerTest {
   }
 
   /**
-   * Tests the {@link BlockWorker#sessionHeartbeat(long, List)}  method.
+   * Tests the {@link BlockWorker#sessionHeartbeat(long)}  method.
    */
   @Test
   public void sessionHeartbeat() {
     long sessionId = mRandom.nextLong();
-    long metricIncrease = 3;
-    List<Long> metrics = Arrays.asList(new Long[Constants.CLIENT_METRICS_SIZE]);
-    Collections.fill(metrics, metricIncrease);
-    metrics.set(0, Constants.CLIENT_METRICS_VERSION);
 
-    mBlockWorker.sessionHeartbeat(sessionId, metrics);
+    mBlockWorker.sessionHeartbeat(sessionId);
     verify(mSessions).sessionHeartbeat(sessionId);
-    Counter counter = WorkerContext.getWorkerSource().getMetricRegistry().getCounters()
-        .get(WorkerSource.BLOCKS_READ_LOCAL);
-    assertEquals(metricIncrease, counter.getCount());
   }
 
   /**

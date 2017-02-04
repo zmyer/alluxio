@@ -43,7 +43,7 @@ fs命令中的所有“路径”都应该以以下开头：
     <tr>
       <td>{{ item.operation }}</td>
       <td>{{ item.syntax }}</td>
-      <td>{{ site.data.table.cn.operation-command.[item.operation] }}</td>
+      <td>{{ site.data.table.cn.operation-command[item.operation] }}</td>
     </tr>
   {% endfor %}
 </table>
@@ -57,6 +57,24 @@ fs命令中的所有“路径”都应该以以下开头：
 例如，当测试一个新的计算任务时，`cat`命令可以用来快速确认其输出结果：
 
 {% include Command-Line-Interface/cat.md %}
+
+## checkConsistency
+
+`checkConsistency`命令会对比一给定路径下Alluxio以及底层存储系统的元数据，如果该路径是一个目录，那么其所有子内容都会被对比。该命令返回包含所有不一致的文件和目录的列表，系统管理员决定是否对这些不一致数据进行调整。为了防止Alluxio与底层存储系统的元数据不一致，应将你的系统设置为通过Alluxio来修改文件和目录，而不是直接访问底层存储系统进行修改。
+
+注意：该命令需要请求将要被检查的目录子树的读锁，这意味着在该命令完成之前无法对该目录子树的文件或者目录进行写操作或者更新操作。
+
+例如，`checkConsistency`命令可以用来周期性地检查命名空间的完整性：
+
+{% include Command-Line-Interface/checkConsistency.md %}
+
+## checksum
+
+`checksum`命令输出某个Alluxio文件的md5值。
+
+例如，`checksum`可以用来验证Alluxio中的文件内容与存储在底层文件系统或者本地文件系统中的文件内容是否匹配：
+
+{% include Command-Line-Interface/checksum.md %}
 
 ## chgrp
 
@@ -101,7 +119,7 @@ fs命令中的所有“路径”都应该以以下开头：
 
 ## copyFromLocal
 
-`copyFromLocal`命令将本地文件系统中的文件拷贝到Alluxio中，如果你运行该命令的机器上有Alluxio worker，那么数据便会存放在这个worker上，否则，数据将会随机地存放在一个运行Alluxio worker的远程节点上。如果该命令指定的目标是一个文件夹，那么这个文件夹及其所有内容都会被递归复制到Alluxio中。
+`copyFromLocal`命令将本地文件系统中的文件拷贝到Alluxio中，如果你运行该命令的机器上有Alluxio worker，那么数据便会存放在这个worker上，否则，数据将会随机地复制到一个运行Alluxio worker的远程节点上。如果该命令指定的目标是一个文件夹，那么这个文件夹及其所有内容都会被递归复制到Alluxio中。
 
 使用举例：使用`copyFromLocal`命令可以快速将数据复制到alluxio系统中以便后续处理：
 
@@ -123,6 +141,16 @@ fs命令中的所有“路径”都应该以以下开头：
 
 {% include Command-Line-Interface/count.md %}
 
+## cp
+
+`cp`命令拷贝Alluxio文件系统中的一个文件或者目录。
+
+如果使用了`-R`选项，并且源路径是一个目录，`cp`将源路径下的整个子树拷贝到目标路径。
+
+例如，`cp`可以在底层文件系统之间拷贝文件。
+
+{% include Command-Line-Interface/cp.md %}
+
 ## du
 
 `du`命令输出一个文件的大小，如果指定的目标为文件夹，该命令输出该文件夹下所有子文件及子文件夹中内容的大小总和。
@@ -132,8 +160,9 @@ fs命令中的所有“路径”都应该以以下开头：
 {% include Command-Line-Interface/du.md %}
 
 ## fileInfo
+`fileInfo`命令从1.5开始不再支持，请使用stat命令。
 
-`fileInfo`命令将一个文件的主要文件信息输出到控制台，这主要是为了让用户调试他们的系统。一般来说，在Web UI上查看文件信息要容易理解得多。
+`fileInfo`命令将一个文件的主要信息输出到控制台，这主要是为了让用户调试他们的系统。一般来说，在Web UI上查看文件信息要容易理解得多。
 
 使用举例：使用`fileInfo`命令能够获取到一个文件的数据块的位置，这在获取计算任务中的数据局部性时非常有用。
 
@@ -266,11 +295,19 @@ fs命令中的所有“路径”都应该以以下开头：
 
 ## setTtl
 
-`setTtl`命令设置一个文件的ttl时间，单位为毫秒。当当前时间大于该文件的创建时间与ttl时间之和时，该文件会被自动删除。该删除操作会同时作用于Alluxio和底层文件系统。
+`setTtl`命令设置一个文件或者文件夹的ttl时间，单位为毫秒。如果当前时间大于该文件的创建时间与ttl时间之和时，行动参数将指示要执行的操作。`delete`操作（默认）将同时删除Alluxio和底层文件系统中的文件，而`free`操作将仅仅删除Alluxio中的文件。
 
-使用举例：管理员在知道某些文件经过一段时间后便没用时，可以使用`setTtl`命令。
+使用举例：管理员在知道某些文件经过一段时间后便没用时，可以使用带有`delete`操作的`setTtl`命令来清理文件；如果仅仅希望为Alluxio释放更多的空间，可以使用带有`free`操作的`setTtl`命令来清理Alluxio中的文件内容。
 
 {% include Command-Line-Interface/setTtl.md %}
+
+## stat
+
+`stat`命令将一个文件或者文件夹的主要信息输出到控制台，这主要是为了让用户调试他们的系统。一般来说，在Web UI上查看文件信息要容易理解得多。
+
+使用举例：使用`stat`命令能够获取到一个文件的数据块的位置，这在获取计算任务中的数据局部性时非常有用。
+
+{% include Command-Line-Interface/stat.md %}
 
 ## tail
 

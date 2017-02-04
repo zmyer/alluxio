@@ -12,35 +12,37 @@
 package alluxio.worker;
 
 import alluxio.Server;
-import alluxio.metrics.MetricsSystem;
+import alluxio.wire.WorkerNetAddress;
 import alluxio.worker.block.BlockWorker;
 import alluxio.worker.file.FileSystemWorker;
 
 import java.net.InetSocketAddress;
 
+import javax.annotation.concurrent.ThreadSafe;
+
 /**
  * A worker in the Alluxio system.
  */
 public interface AlluxioWorkerService extends Server {
-
   /**
-   * Factory for acquiring an AlluxioWorker.
+   * Factory for creating {@link AlluxioWorkerService}.
    */
-  class Factory {
-    private static AlluxioWorkerService sAlluxioWorker;
-
+  @ThreadSafe
+  final class Factory {
     /**
-     * @return the default Alluxio worker
+     * @return a new instance of {@link AlluxioWorkerService}
      */
-    public static synchronized AlluxioWorkerService get() {
-      if (sAlluxioWorker == null) {
-        sAlluxioWorker = new DefaultAlluxioWorker();
-      }
-      return sAlluxioWorker;
+    public static AlluxioWorkerService create() {
+      return new DefaultAlluxioWorker();
     }
 
-    private Factory() {} // Not intended for instantiation
+    private Factory() {} // prevent instantiation
   }
+
+  /**
+   * @return the connect information for this worker
+   */
+  WorkerNetAddress getAddress();
 
   /**
    * @return the block worker for this Alluxio worker
@@ -63,6 +65,11 @@ public interface AlluxioWorkerService extends Server {
   FileSystemWorker getFileSystemWorker();
 
   /**
+   * @return this worker's rpc address
+   */
+  InetSocketAddress getRpcAddress();
+
+  /**
    * @return the start time of the worker in milliseconds
    */
   long getStartTimeMs();
@@ -81,16 +88,6 @@ public interface AlluxioWorkerService extends Server {
    * @return the worker web service port (used by unit test only)
    */
   int getWebLocalPort();
-
-  /**
-   * @return this worker's rpc address
-   */
-  InetSocketAddress getRpcAddress();
-
-  /**
-   * @return the worker metric system reference
-   */
-  MetricsSystem getWorkerMetricsSystem();
 
   /**
    * Waits until the worker is ready to server requests.

@@ -85,6 +85,9 @@ public final class LsCommandTest extends AbstractAlluxioShellTest {
    * Tests ls command when security is not enabled.
    */
   @Test
+  @LocalAlluxioClusterResource.Config(
+      confParams = {PropertyKey.Name.SECURITY_AUTHORIZATION_PERMISSION_ENABLED, "false",
+          PropertyKey.Name.SECURITY_AUTHENTICATION_TYPE, "NOSASL"})
   public void lsNoAcl() throws IOException, AlluxioException {
     URIStatus[] files = createFiles();
     mFsShell.run("ls", "/testRoot");
@@ -95,6 +98,38 @@ public final class LsCommandTest extends AbstractAlluxioShellTest {
         LsCommand.STATE_FOLDER);
     expected += getLsNoAclResultStr("/testRoot/testFileC", files[3].getCreationTimeMs(), 30,
         LsCommand.STATE_FILE_NOT_IN_MEMORY);
+    Assert.assertEquals(expected, mOutput.toString());
+  }
+
+  /**
+   * Tests ls -d command when security is not enabled.
+   */
+  @Test
+  @LocalAlluxioClusterResource.Config(
+      confParams = {PropertyKey.Name.SECURITY_AUTHORIZATION_PERMISSION_ENABLED, "false",
+          PropertyKey.Name.SECURITY_AUTHENTICATION_TYPE, "NOSASL"})
+  public void lsDirectoryAsPlainFileNoAcl() throws IOException, AlluxioException {
+    URIStatus[] files = createFiles();
+    mFsShell.run("ls", "-d", "/testRoot");
+    URIStatus dirStatus = mFileSystem.getStatus(new AlluxioURI("/testRoot/"));
+    String expected = "";
+    expected += getLsNoAclResultStr("/testRoot", dirStatus.getCreationTimeMs(),
+        3 /* number of direct children under /testRoot/ dir */, LsCommand.STATE_FOLDER);
+    Assert.assertEquals(expected, mOutput.toString());
+  }
+
+  /**
+   * Tests ls -d command on root directory when security is not enabled.
+   */
+  @Test
+  @LocalAlluxioClusterResource.Config(
+      confParams = {PropertyKey.Name.SECURITY_AUTHORIZATION_PERMISSION_ENABLED, "false",
+          PropertyKey.Name.SECURITY_AUTHENTICATION_TYPE, "NOSASL"})
+  public void lsRootNoAcl() throws IOException, AlluxioException {
+    mFsShell.run("ls", "-d", "/");
+    URIStatus dirStatus = mFileSystem.getStatus(new AlluxioURI("/"));
+    String expected = "";
+    expected += getLsNoAclResultStr("/", dirStatus.getCreationTimeMs(), 0, LsCommand.STATE_FOLDER);
     Assert.assertEquals(expected, mOutput.toString());
   }
 
@@ -130,6 +165,9 @@ public final class LsCommandTest extends AbstractAlluxioShellTest {
    * Tests ls command with wildcard when security is not enabled.
    */
   @Test
+  @LocalAlluxioClusterResource.Config(
+      confParams = {PropertyKey.Name.SECURITY_AUTHORIZATION_PERMISSION_ENABLED, "false",
+          PropertyKey.Name.SECURITY_AUTHENTICATION_TYPE, "NOSASL"})
   public void lsWildcardNoAcl() throws IOException, AlluxioException {
     String testDir = AlluxioShellUtilsTest.resetFileHierarchy(mFileSystem);
 
@@ -191,6 +229,9 @@ public final class LsCommandTest extends AbstractAlluxioShellTest {
    * Tests lsr command with wildcard when security is not enabled.
    */
   @Test
+  @LocalAlluxioClusterResource.Config(
+      confParams = {PropertyKey.Name.SECURITY_AUTHORIZATION_PERMISSION_ENABLED, "false",
+          PropertyKey.Name.SECURITY_AUTHENTICATION_TYPE, "NOSASL"})
   public void lsrNoAcl() throws IOException, AlluxioException {
     URIStatus[] files = createFiles();
     mFsShell.run("lsr", "/testRoot");
@@ -238,6 +279,23 @@ public final class LsCommandTest extends AbstractAlluxioShellTest {
     expected += getLsResultStr("/testRoot/testFileC", files[3].getCreationTimeMs(), 30,
         LsCommand.STATE_FILE_NOT_IN_MEMORY, testUser, testUser, files[3].getMode(),
         files[3].isFolder());
+    Assert.assertEquals(expected, mOutput.toString());
+  }
+
+  /**
+   * Tests ls command with a file where the file name includes a specifier character.
+   */
+  @Test
+  @LocalAlluxioClusterResource.Config(
+      confParams = {PropertyKey.Name.SECURITY_AUTHORIZATION_PERMISSION_ENABLED, "false",
+          PropertyKey.Name.SECURITY_AUTHENTICATION_TYPE, "NOSASL"})
+  public void lsWithFormatSpecifierCharacter() throws IOException, AlluxioException {
+    String fileName = "/localhost%2C61764%2C1476207067267..meta.1476207073442.meta";
+    FileSystemTestUtils.createByteFile(mFileSystem, fileName, WriteType.MUST_CACHE, 10);
+    URIStatus file = mFileSystem.getStatus(new AlluxioURI(fileName));
+    mFsShell.run("ls", "/");
+    String expected = getLsNoAclResultStr(fileName, file.getCreationTimeMs(), 10,
+        LsCommand.STATE_FILE_IN_MEMORY);
     Assert.assertEquals(expected, mOutput.toString());
   }
 }

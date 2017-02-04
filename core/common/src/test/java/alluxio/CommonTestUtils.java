@@ -11,9 +11,7 @@
 
 package alluxio;
 
-import alluxio.util.CommonUtils;
-
-import com.google.common.base.Function;
+import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Lists;
 import com.google.common.testing.EqualsTester;
@@ -22,6 +20,7 @@ import org.powermock.reflect.Whitebox;
 
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
+import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
@@ -82,23 +81,6 @@ public final class CommonTestUtils {
   }
 
   /**
-   * Waits for a condition to be satisfied until a timeout occurs.
-   *
-   * @param description a description of what causes condition to evaluation to true
-   * @param condition the condition to wait on
-   * @param timeoutMs the number of milliseconds to wait before giving up and throwing an exception
-   */
-  public static void waitFor(String description, Function<Void, Boolean> condition, int timeoutMs) {
-    long start = System.currentTimeMillis();
-    while (!condition.apply(null)) {
-      if (System.currentTimeMillis() - start > timeoutMs) {
-        throw new RuntimeException("Timed out waiting for " + description);
-      }
-      CommonUtils.sleepMs(20);
-    }
-  }
-
-  /**
    * Uses reflection to test the equals and hashCode methods for the given simple java object.
    *
    * It is required that the given class has a no-arg constructor.
@@ -110,18 +92,22 @@ public final class CommonTestUtils {
    * @param clazz the class to test the equals and hashCode methods for
    * @param excludedFields names of fields which should not impact equality
    */
-  public static <T> void testEquals(Class<T> clazz, String... excludedFields) throws Exception {
+  public static <T> void testEquals(Class<T> clazz, String... excludedFields) {
     Set<String> excludedFieldsSet = new HashSet<>(Arrays.asList(excludedFields));
     EqualsTester equalsTester = new EqualsTester();
     equalsTester.addEqualityGroup(createBaseObject(clazz), createBaseObject(clazz));
     // For each non-excluded field, create an object of the class with only that field changed.
-    for (Field field : getAllFields(clazz)) {
+    for (Field field : getNonStaticFields(clazz)) {
       if (excludedFieldsSet.contains(field.getName())) {
         continue;
       }
       field.setAccessible(true);
       T instance = createBaseObject(clazz);
-      field.set(instance, getValuesForFieldType(field.getType()).get(1));
+      try {
+        field.set(instance, getValuesForFieldType(field.getType()).get(1));
+      } catch (Exception e) {
+        throw Throwables.propagate(e);
+      }
       equalsTester.addEqualityGroup(instance);
     }
     equalsTester.testEquals();
@@ -132,15 +118,19 @@ public final class CommonTestUtils {
    * @return an object of the given class with fields set according to the first values returned by
    *         {@link #getValuesForFieldType(Class)}
    */
-  private static <T> T createBaseObject(Class<T> clazz) throws Exception {
-    Constructor<T> constructor = clazz.getDeclaredConstructor();
-    constructor.setAccessible(true);
-    T instance = constructor.newInstance();
-    for (Field field : getAllFields(clazz)) {
-      field.setAccessible(true);
-      field.set(instance, getValuesForFieldType(field.getType()).get(0));
+  private static <T> T createBaseObject(Class<T> clazz) {
+    try {
+      Constructor<T> constructor = clazz.getDeclaredConstructor();
+      constructor.setAccessible(true);
+      T instance = constructor.newInstance();
+      for (Field field : getNonStaticFields(clazz)) {
+        field.setAccessible(true);
+        field.set(instance, getValuesForFieldType(field.getType()).get(0));
+      }
+      return instance;
+    } catch (Exception e) {
+      throw Throwables.propagate(e);
     }
-    return instance;
   }
 
   /**
@@ -180,13 +170,17 @@ public final class CommonTestUtils {
   }
 
   /**
-   * @param type the type to get the field for
-   * @return all fields of an object of the given type
+   * @param type the type to get the fields for
+   * @return all nonstatic fields of an object of the given type
    */
-  private static List<Field> getAllFields(Class<?> type) {
+  private static List<Field> getNonStaticFields(Class<?> type) {
     List<Field> fields = new ArrayList<>();
     for (Class<?> c = type; c != null; c = c.getSuperclass()) {
-      fields.addAll(Arrays.asList(c.getDeclaredFields()));
+      for (Field field : c.getDeclaredFields()) {
+        if (!Modifier.isStatic(field.getModifiers())) {
+          fields.add(field);
+        }
+      }
     }
     return fields;
   }

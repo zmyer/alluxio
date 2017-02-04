@@ -11,14 +11,13 @@
 
 package alluxio.master.file.meta;
 
-import alluxio.Constants;
 import alluxio.collections.FieldIndex;
 import alluxio.collections.IndexDefinition;
 import alluxio.collections.UniqueFieldIndex;
+import alluxio.master.ProtobufUtils;
 import alluxio.master.file.options.CreateDirectoryOptions;
 import alluxio.proto.journal.File.InodeDirectoryEntry;
 import alluxio.proto.journal.Journal.JournalEntry;
-import alluxio.security.authorization.Permission;
 import alluxio.wire.FileInfo;
 
 import com.google.common.collect.ImmutableSet;
@@ -42,7 +41,7 @@ public final class InodeDirectory extends Inode<InodeDirectory> {
   };
 
   /** Use UniqueFieldIndex directly for name index rather than using IndexedSet. */
-  private FieldIndex<Inode<?>> mChildren = new UniqueFieldIndex<>(NAME_INDEX);
+  private final FieldIndex<Inode<?>> mChildren = new UniqueFieldIndex<>(NAME_INDEX);
 
   private boolean mMountPoint;
 
@@ -68,9 +67,10 @@ public final class InodeDirectory extends Inode<InodeDirectory> {
    * Adds the given inode to the set of children.
    *
    * @param child the inode to add
+   * @return true if inode was added successfully, false otherwise
    */
-  public void addChild(Inode<?> child) {
-    mChildren.add(child);
+  public boolean addChild(Inode<?> child) {
+    return mChildren.add(child);
   }
 
   /**
@@ -180,7 +180,8 @@ public final class InodeDirectory extends Inode<InodeDirectory> {
     ret.setCacheable(false);
     ret.setPersisted(isPersisted());
     ret.setLastModificationTimeMs(getLastModificationTimeMs());
-    ret.setTtl(Constants.NO_TTL);
+    ret.setTtl(mTtl);
+    ret.setTtlAction(mTtlAction);
     ret.setOwner(getOwner());
     ret.setGroup(getGroup());
     ret.setMode(getMode());
@@ -201,17 +202,19 @@ public final class InodeDirectory extends Inode<InodeDirectory> {
    * @return the {@link InodeDirectory} representation
    */
   public static InodeDirectory fromJournalEntry(InodeDirectoryEntry entry) {
-    Permission permission =
-        new Permission(entry.getOwner(), entry.getGroup(), (short) entry.getMode());
     return new InodeDirectory(entry.getId())
         .setCreationTimeMs(entry.getCreationTimeMs())
         .setName(entry.getName())
         .setParentId(entry.getParentId())
         .setPersistenceState(PersistenceState.valueOf(entry.getPersistenceState()))
         .setPinned(entry.getPinned())
-        .setLastModificationTimeMs(entry.getLastModificationTimeMs())
-        .setPermission(permission)
+        .setLastModificationTimeMs(entry.getLastModificationTimeMs(), true)
+        .setOwner(entry.getOwner())
+        .setGroup(entry.getGroup())
+        .setMode((short) entry.getMode())
         .setMountPoint(entry.getMountPoint())
+        .setTtl(entry.getTtl())
+        .setTtlAction(ProtobufUtils.fromProtobuf(entry.getTtlAction()))
         .setDirectChildrenLoaded(entry.getDirectChildrenLoaded());
   }
 
@@ -221,17 +224,20 @@ public final class InodeDirectory extends Inode<InodeDirectory> {
    * @param id id of this inode
    * @param parentId id of the parent of this inode
    * @param name name of this inode
-   * @param directoryOptions options to create this directory
+   * @param options options to create this directory
    * @return the {@link InodeDirectory} representation
    */
   public static InodeDirectory create(long id, long parentId, String name,
-      CreateDirectoryOptions directoryOptions) {
-    Permission permission = new Permission(directoryOptions.getPermission()).applyDirectoryUMask();
+      CreateDirectoryOptions options) {
     return new InodeDirectory(id)
         .setParentId(parentId)
         .setName(name)
-        .setPermission(permission)
-        .setMountPoint(directoryOptions.isMountPoint());
+        .setTtl(options.getTtl())
+        .setTtlAction(options.getTtlAction())
+        .setOwner(options.getOwner())
+        .setGroup(options.getGroup())
+        .setMode(options.getMode().toShort())
+        .setMountPoint(options.isMountPoint());
   }
 
   @Override
@@ -245,6 +251,8 @@ public final class InodeDirectory extends Inode<InodeDirectory> {
         .setPinned(isPinned())
         .setLastModificationTimeMs(getLastModificationTimeMs())
         .setMountPoint(isMountPoint())
+        .setTtl(getTtl())
+        .setTtlAction(ProtobufUtils.toProtobuf(getTtlAction()))
         .setDirectChildrenLoaded(isDirectChildrenLoaded())
         .setOwner(getOwner()).setGroup(getGroup()).setMode(getMode())
         .build();

@@ -12,9 +12,11 @@
 package alluxio.master.file.meta;
 
 import alluxio.Constants;
+import alluxio.exception.ExceptionMessage;
+import alluxio.exception.InvalidPathException;
 import alluxio.master.journal.JournalEntryRepresentable;
-import alluxio.security.authorization.Permission;
 import alluxio.wire.FileInfo;
+import alluxio.wire.TtlAction;
 
 import com.google.common.base.Objects;
 
@@ -32,8 +34,10 @@ import javax.annotation.concurrent.NotThreadSafe;
 public abstract class Inode<T> implements JournalEntryRepresentable {
   protected long mCreationTimeMs;
   private boolean mDeleted;
-  protected boolean mDirectory;
-  protected long mId;
+  protected final boolean mDirectory;
+  protected final long mId;
+  protected long mTtl;
+  protected TtlAction mTtlAction;
   private long mLastModificationTimeMs;
   private String mName;
   private long mParentId;
@@ -52,6 +56,8 @@ public abstract class Inode<T> implements JournalEntryRepresentable {
     mDirectory = isDirectory;
     mGroup = "";
     mId = id;
+    mTtl = Constants.NO_TTL;
+    mTtlAction = TtlAction.DELETE;
     mLastModificationTimeMs = mCreationTimeMs;
     mName = null;
     mParentId = InodeTree.NO_PARENT;
@@ -81,6 +87,20 @@ public abstract class Inode<T> implements JournalEntryRepresentable {
    */
   public long getId() {
     return mId;
+  }
+
+  /**
+   * @return the ttl of the file
+   */
+  public long getTtl() {
+    return mTtl;
+  }
+
+  /**
+   * @return the {@link TtlAction}
+   */
+  public TtlAction getTtlAction() {
+    return mTtlAction;
   }
 
   /**
@@ -188,12 +208,29 @@ public abstract class Inode<T> implements JournalEntryRepresentable {
   }
 
   /**
+   * Sets the last modification time of the inode to the new time if the new time is more recent.
+   * This method can be called concurrently with deterministic results.
+   *
    * @param lastModificationTimeMs the last modification time to use
    * @return the updated object
    */
   public T setLastModificationTimeMs(long lastModificationTimeMs) {
-    mLastModificationTimeMs = lastModificationTimeMs;
-    return getThis();
+    return setLastModificationTimeMs(lastModificationTimeMs, false);
+  }
+
+  /**
+   * @param lastModificationTimeMs the last modification time to use
+   * @param override if true, sets the value regardless of the previous last modified time,
+   *                 should be set to true for journal replay
+   * @return the updated object
+   */
+  public T setLastModificationTimeMs(long lastModificationTimeMs, boolean override) {
+    synchronized (this) {
+      if (override || mLastModificationTimeMs < lastModificationTimeMs) {
+        mLastModificationTimeMs = lastModificationTimeMs;
+      }
+      return getThis();
+    }
   }
 
   /**
@@ -215,33 +252,29 @@ public abstract class Inode<T> implements JournalEntryRepresentable {
   }
 
   /**
+   * @param ttl the TTL to use, in milliseconds
+   * @return the updated object
+   */
+  public T setTtl(long ttl) {
+    mTtl = ttl;
+    return getThis();
+  }
+
+  /**
+   * @param ttlAction the {@link TtlAction} to use
+   * @return the updated options object
+   */
+  public T setTtlAction(TtlAction ttlAction) {
+    mTtlAction = ttlAction;
+    return getThis();
+  }
+
+  /**
    * @param persistenceState the {@link PersistenceState} to use
    * @return the updated object
    */
   public T setPersistenceState(PersistenceState persistenceState) {
     mPersistenceState = persistenceState;
-    return getThis();
-  }
-
-  /**
-   * @param permission the {@link Permission} to use
-   * @return the updated object
-   */
-  public T setPermission(Permission permission) {
-    if (permission != null) {
-      mOwner = permission.getOwner();
-      mGroup = permission.getGroup();
-      mMode = permission.getMode().toShort();
-    }
-    return getThis();
-  }
-
-  /**
-   * @param mode the mode of the inode
-   * @return the updated object
-   */
-  public T setPermission(short mode) {
-    mMode = mode;
     return getThis();
   }
 
@@ -264,6 +297,15 @@ public abstract class Inode<T> implements JournalEntryRepresentable {
   }
 
   /**
+   * @param mode the mode of the inode
+   * @return the updated object
+   */
+  public T setMode(short mode) {
+    mMode = mode;
+    return getThis();
+  }
+
+  /**
    * Generates a {@link FileInfo} of the file or folder.
    *
    * @param path the path of the file
@@ -277,10 +319,94 @@ public abstract class Inode<T> implements JournalEntryRepresentable {
   protected abstract T getThis();
 
   /**
-   * Acquires the read lock for this inode.
+   * Obtains a read lock on the inode. This call should only be used when locking the root or an
+   * inode by id and not path or parent.
    */
   public void lockRead() {
     mLock.readLock().lock();
+  }
+
+  /**
+   * Obtains a read lock on the inode. Afterward, checks the inode state to ensure the parent is
+   * consistent with what the caller is expecting. If the state is inconsistent, an exception
+   * will be thrown and the lock will be released.
+   *
+   * NOTE: This method assumes that the inode path to the parent has been read locked.
+   *
+   * @param parent the expected parent inode
+   * @throws InvalidPathException if the parent is not as expected
+   */
+  public void lockReadAndCheckParent(Inode parent) throws InvalidPathException {
+    lockRead();
+    if (mParentId != InodeTree.NO_PARENT && mParentId != parent.getId()) {
+      unlockRead();
+      throw new InvalidPathException(ExceptionMessage.PATH_INVALID_CONCURRENT_RENAME.getMessage());
+    }
+  }
+
+  /**
+   * Obtains a read lock on the inode. Afterward, checks the inode state to ensure the full inode
+   * path is consistent with what the caller is expecting. If the state is inconsistent, an
+   * exception will be thrown and the lock will be released.
+   *
+   * NOTE: This method assumes that the inode path to the parent has been read locked.
+   *
+   * @param parent the expected parent inode
+   * @param name the expected name of the inode to be locked
+   * @throws InvalidPathException if the parent and/or name is not as expected
+   */
+  public void lockReadAndCheckNameAndParent(Inode parent, String name) throws InvalidPathException {
+    lockReadAndCheckParent(parent);
+    if (!mName.equals(name)) {
+      unlockRead();
+      throw new InvalidPathException(ExceptionMessage.PATH_INVALID_CONCURRENT_RENAME.getMessage());
+    }
+  }
+
+  /**
+   * Obtains a write lock on the inode. This call should only be used when locking the root or an
+   * inode by id and not path or parent.
+   */
+  public void lockWrite() {
+    mLock.writeLock().lock();
+  }
+
+  /**
+   * Obtains a write lock on the inode. Afterward, checks the inode state to ensure the parent is
+   * consistent with what the caller is expecting. If the state is inconsistent, an exception
+   * will be thrown and the lock will be released.
+   *
+   * NOTE: This method assumes that the inode path to the parent has been read locked.
+   *
+   * @param parent the expected parent inode
+   * @throws InvalidPathException if the parent is not as expected
+   */
+  public void lockWriteAndCheckParent(Inode parent) throws InvalidPathException {
+    lockWrite();
+    if (mParentId != InodeTree.NO_PARENT && mParentId != parent.getId()) {
+      unlockWrite();
+      throw new InvalidPathException(ExceptionMessage.PATH_INVALID_CONCURRENT_RENAME.getMessage());
+    }
+  }
+
+  /**
+   * Obtains a write lock on the inode. Afterward, checks the inode state to ensure the full inode
+   * path is consistent with what the caller is expecting. If the state is inconsistent, an
+   * exception will be thrown and the lock will be released.
+   *
+   * NOTE: This method assumes that the inode path to the parent has been read locked.
+   *
+   * @param parent the expected parent inode
+   * @param name the expected name of the inode to be locked
+   * @throws InvalidPathException if the parent and/or name is not as expected
+   */
+  public void lockWriteAndCheckNameAndParent(Inode parent, String name)
+      throws InvalidPathException {
+    lockWriteAndCheckParent(parent);
+    if (!mName.equals(name)) {
+      unlockWrite();
+      throw new InvalidPathException(ExceptionMessage.PATH_INVALID_CONCURRENT_RENAME.getMessage());
+    }
   }
 
   /**
@@ -288,13 +414,6 @@ public abstract class Inode<T> implements JournalEntryRepresentable {
    */
   public void unlockRead() {
     mLock.readLock().unlock();
-  }
-
-  /**
-   * Acquires the write lock for this inode.
-   */
-  public void lockWrite() {
-    mLock.writeLock().lock();
   }
 
   /**
@@ -338,6 +457,7 @@ public abstract class Inode<T> implements JournalEntryRepresentable {
   protected Objects.ToStringHelper toStringHelper() {
     return Objects.toStringHelper(this).add("id", mId).add("name", mName).add("parentId", mParentId)
         .add("creationTimeMs", mCreationTimeMs).add("pinned", mPinned).add("deleted", mDeleted)
+        .add("ttl", mTtl).add("ttlAction", mTtlAction)
         .add("directory", mDirectory).add("persistenceState", mPersistenceState)
         .add("lastModificationTimeMs", mLastModificationTimeMs).add("owner", mOwner)
         .add("group", mGroup).add("permission", mMode);

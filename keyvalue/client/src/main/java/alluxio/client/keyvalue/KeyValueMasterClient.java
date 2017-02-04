@@ -42,7 +42,7 @@ public final class KeyValueMasterClient extends AbstractMasterClient {
    * @param masterAddress the master address
    */
   public KeyValueMasterClient(InetSocketAddress masterAddress) {
-    super(masterAddress);
+    super(null, masterAddress);
   }
 
   @Override
@@ -69,7 +69,7 @@ public final class KeyValueMasterClient extends AbstractMasterClient {
    * Marks a partition complete and adds it to an incomplete key-value store.
    *
    * @param path URI of the key-value store
-   * @param info information of this completed parition
+   * @param info information of this completed partition
    * @throws AlluxioException if an Alluxio error occurs
    * @throws IOException if an I/O error occurs
    */

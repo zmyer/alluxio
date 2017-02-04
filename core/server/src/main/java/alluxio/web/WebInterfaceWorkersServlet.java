@@ -23,7 +23,6 @@ import java.io.IOException;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
-import java.util.Set;
 
 import javax.annotation.concurrent.ThreadSafe;
 import javax.servlet.ServletException;
@@ -223,10 +222,8 @@ public final class WebInterfaceWorkersServlet extends HttpServlet {
     NodeInfo[] normalNodeInfos = generateOrderedNodeInfos(workerInfos);
     request.setAttribute("normalNodeInfos", normalNodeInfos);
 
-    Set<WorkerInfo> lostWorkerInfos = mBlockMaster.getLostWorkersInfo();
+    List<WorkerInfo> lostWorkerInfos = mBlockMaster.getLostWorkersInfoList();
     NodeInfo[] failedNodeInfos = generateOrderedNodeInfos(lostWorkerInfos);
     request.setAttribute("failedNodeInfos", failedNodeInfos);
-
-    request.setAttribute("workerWebPort", Configuration.getInt(PropertyKey.WORKER_WEB_PORT));
   }
 }

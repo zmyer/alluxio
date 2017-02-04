@@ -24,6 +24,7 @@ import alluxio.proto.journal.File.InodeDirectoryEntry;
 import alluxio.proto.journal.File.InodeDirectoryIdGeneratorEntry;
 import alluxio.proto.journal.File.InodeFileEntry;
 import alluxio.proto.journal.File.InodeLastModificationTimeEntry;
+import alluxio.proto.journal.File.PTtlAction;
 import alluxio.proto.journal.File.PersistDirectoryEntry;
 import alluxio.proto.journal.File.ReinitializeFileEntry;
 import alluxio.proto.journal.File.RenameEntry;
@@ -38,7 +39,6 @@ import alluxio.proto.journal.KeyValue.RenameStoreEntry;
 import alluxio.proto.journal.Lineage.DeleteLineageEntry;
 import alluxio.proto.journal.Lineage.LineageEntry;
 import alluxio.proto.journal.Lineage.LineageIdGeneratorEntry;
-import alluxio.security.authorization.Permission;
 
 import com.google.common.base.Function;
 import com.google.common.collect.ContiguousSet;
@@ -63,7 +63,7 @@ import java.util.List;
 
 /**
  * Base class for testing different {@link JournalFormatter}'s serialization/deserialization
- * correctness of each entry type defined in {@link JournalEntry.EntryCase}.
+ * correctness of each entry type defined in {@link JournalEntry}.
  * <p>
  * To test an implementation of {@link JournalFormatter}, extend this class and override method
  * {@link #getFormatter()}.
@@ -86,8 +86,9 @@ public abstract class AbstractJournalFormatterTest {
   protected static final AlluxioURI TEST_UFS_PATH = new AlluxioURI("hdfs://host:port/test/path");
   protected static final String TEST_JOB_COMMAND = "Command";
   protected static final String TEST_JOB_OUTPUT_PATH = "/test/path";
-  protected static final Permission TEST_PERMISSION =
-      new Permission("user1", "group1", (short) 0777);
+  protected static final String TEST_OWNER = "user1";
+  protected static final String TEST_GROUP = "group1";
+  protected static final short TEST_MODE = (short) 0777;
   protected static final String TEST_PERSISTED_STATE = "PERSISTED";
   protected static final String TEST_KEY1 = "test_key1";
   protected static final String TEST_KEY2 = "test_key2";
@@ -130,9 +131,10 @@ public abstract class AbstractJournalFormatterTest {
                     Range.closedOpen(TEST_BLOCK_ID, TEST_BLOCK_ID + 10), DiscreteDomain.longs())
                     .asList())
                 .setTtl(Constants.NO_TTL)
-                .setOwner(TEST_PERMISSION.getOwner())
-                .setGroup(TEST_PERMISSION.getGroup())
-                .setMode(TEST_PERMISSION.getMode().toShort()))
+                .setTtlAction(PTtlAction.DELETE)
+                .setOwner(TEST_OWNER)
+                .setGroup(TEST_GROUP)
+                .setMode(TEST_MODE))
             .build())
         .add(JournalEntry.newBuilder()
             .setInodeDirectory(InodeDirectoryEntry.newBuilder()
@@ -143,9 +145,9 @@ public abstract class AbstractJournalFormatterTest {
                 .setPersistenceState(TEST_PERSISTED_STATE)
                 .setPinned(true)
                 .setLastModificationTimeMs(TEST_OP_TIME_MS)
-                .setOwner(TEST_PERMISSION.getOwner())
-                .setGroup(TEST_PERMISSION.getGroup())
-                .setMode(TEST_PERMISSION.getMode().toShort()))
+                .setOwner(TEST_OWNER)
+                .setGroup(TEST_GROUP)
+                .setMode(TEST_MODE))
             .build())
         .add(JournalEntry.newBuilder()
             .setInodeLastModificationTime(InodeLastModificationTimeEntry.newBuilder()
@@ -195,7 +197,8 @@ public abstract class AbstractJournalFormatterTest {
             .setReinitializeFile(ReinitializeFileEntry.newBuilder()
                 .setPath(TEST_FILE_NAME)
                 .setBlockSizeBytes(TEST_BLOCK_SIZE_BYTES)
-                .setTtl(TEST_TTL))
+                .setTtl(TEST_TTL)
+                .setTtlAction(PTtlAction.DELETE))
             .build())
         .add(
             JournalEntry.newBuilder()
@@ -229,9 +232,10 @@ public abstract class AbstractJournalFormatterTest {
                     .setPinned(true)
                     .setPersisted(true)
                     .setTtl(TEST_TTL)
-                    .setOwner(TEST_PERMISSION.getOwner())
-                    .setGroup(TEST_PERMISSION.getGroup())
-                    .setPermission(TEST_PERMISSION.getMode().toShort()))
+                    .setTtlAction(PTtlAction.DELETE)
+                    .setOwner(TEST_OWNER)
+                    .setGroup(TEST_GROUP)
+                    .setPermission(TEST_MODE))
                 .build())
         .add(
             JournalEntry.newBuilder()
@@ -332,8 +336,7 @@ public abstract class AbstractJournalFormatterTest {
    */
   @Test
   public void checkEntriesNumber() {
-    // Subtract one to exclude ENTRY_NOT_SET
-    Assert.assertEquals(JournalEntry.EntryCase.values().length - 1, ENTRIES_LIST.size());
+    Assert.assertEquals(JournalEntry.getDescriptor().getFields().size() - 1, ENTRIES_LIST.size());
   }
 
   /**

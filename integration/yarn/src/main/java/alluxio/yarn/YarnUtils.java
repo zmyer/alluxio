@@ -99,12 +99,13 @@ public final class YarnUtils {
 
   /**
    * Enum representing types of containers run by the yarn setup script. The strings here correspond
-   * with the strings in integration/bin/alluxio-yarn-setup.sh.
+   * with the strings in integration/yarn/bin/alluxio-yarn-setup.sh.
    */
   public enum YarnContainerType {
     APPLICATION_MASTER("application-master"),
     ALLUXIO_MASTER("alluxio-master"),
-    ALLUXIO_WORKER("alluxio-worker");
+    ALLUXIO_WORKER("alluxio-worker"),
+    ;
 
     private final String mName;
 

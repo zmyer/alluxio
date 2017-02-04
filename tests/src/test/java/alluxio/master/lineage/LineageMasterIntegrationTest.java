@@ -12,9 +12,7 @@
 package alluxio.master.lineage;
 
 import alluxio.AlluxioURI;
-import alluxio.CommonTestUtils;
 import alluxio.Constants;
-import alluxio.IntegrationTestConstants;
 import alluxio.IntegrationTestUtils;
 import alluxio.LocalAlluxioClusterResource;
 import alluxio.PropertyKey;
@@ -31,11 +29,15 @@ import alluxio.client.lineage.options.DeleteLineageOptions;
 import alluxio.job.CommandLineJob;
 import alluxio.job.JobConf;
 import alluxio.master.file.meta.PersistenceState;
+import alluxio.security.authentication.AuthenticatedClientUser;
+import alluxio.util.CommonUtils;
+import alluxio.util.WaitForOptions;
 import alluxio.wire.LineageInfo;
 
 import com.google.common.base.Function;
 import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableList;
+import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Rule;
@@ -54,7 +56,6 @@ import java.util.List;
  */
 public class LineageMasterIntegrationTest {
   private static final int BLOCK_SIZE_BYTES = 128;
-  private static final long WORKER_CAPACITY_BYTES = Constants.GB;
   private static final int BUFFER_BYTES = 100;
   private static final String OUT_FILE = "/test";
   private static final int RECOMPUTE_INTERVAL_MS = 1000;
@@ -65,21 +66,27 @@ public class LineageMasterIntegrationTest {
 
   @Rule
   public LocalAlluxioClusterResource mLocalAlluxioClusterResource =
-      new LocalAlluxioClusterResource(WORKER_CAPACITY_BYTES, BLOCK_SIZE_BYTES)
+      new LocalAlluxioClusterResource.Builder()
           .setProperty(PropertyKey.USER_FILE_BUFFER_BYTES, String.valueOf(BUFFER_BYTES))
-          .setProperty(PropertyKey.WORKER_DATA_SERVER_CLASS,
-              IntegrationTestConstants.NETTY_DATA_SERVER)
           .setProperty(PropertyKey.USER_LINEAGE_ENABLED, "true")
           .setProperty(PropertyKey.MASTER_LINEAGE_RECOMPUTE_INTERVAL_MS,
               Integer.toString(RECOMPUTE_INTERVAL_MS))
           .setProperty(PropertyKey.MASTER_LINEAGE_CHECKPOINT_INTERVAL_MS,
-              Integer.toString(CHECKPOINT_INTERVAL_MS));
+              Integer.toString(CHECKPOINT_INTERVAL_MS))
+          .setProperty(PropertyKey.SECURITY_LOGIN_USERNAME, "test")
+          .build();
 
   private CommandLineJob mJob;
 
   @Before
   public void before() throws Exception {
+    AuthenticatedClientUser.set("test");
     mJob = new CommandLineJob("test", new JobConf("output"));
+  }
+
+  @After
+  public void after() throws Exception {
+    AuthenticatedClientUser.remove();
   }
 
   @Test
@@ -154,7 +161,7 @@ public class LineageMasterIntegrationTest {
     }
 
     // Wait for the log file to be created by the recompute job
-    CommonTestUtils.waitFor("the log file to be written", new Function<Void, Boolean>() {
+    CommonUtils.waitFor("the log file to be written", new Function<Void, Boolean>() {
       @Override
       public Boolean apply(Void input) {
         if (!logFile.exists()) {
@@ -167,7 +174,7 @@ public class LineageMasterIntegrationTest {
           throw Throwables.propagate(e);
         }
       }
-    }, 100 * Constants.SECOND_MS);
+    }, WaitForOptions.defaults().setTimeout(100 * Constants.SECOND_MS));
   }
 
   /**
@@ -215,6 +222,7 @@ public class LineageMasterIntegrationTest {
   }
 
   private FileSystemMasterClient getFileSystemMasterClient() {
-    return new FileSystemMasterClient(mLocalAlluxioClusterResource.get().getMaster().getAddress());
+    return new FileSystemMasterClient(null,
+        mLocalAlluxioClusterResource.get().getMaster().getAddress());
   }
 }

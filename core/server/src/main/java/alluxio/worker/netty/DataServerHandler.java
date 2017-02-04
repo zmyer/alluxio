@@ -18,11 +18,14 @@ import alluxio.network.protocol.RPCErrorResponse;
 import alluxio.network.protocol.RPCFileReadRequest;
 import alluxio.network.protocol.RPCFileWriteRequest;
 import alluxio.network.protocol.RPCMessage;
+import alluxio.network.protocol.RPCProtoMessage;
 import alluxio.network.protocol.RPCRequest;
 import alluxio.network.protocol.RPCResponse;
 import alluxio.worker.AlluxioWorkerService;
 
 import com.google.common.base.Preconditions;
+import io.netty.channel.ChannelFuture;
+import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.SimpleChannelInboundHandler;
@@ -53,7 +56,7 @@ final class DataServerHandler extends SimpleChannelInboundHandler<RPCMessage> {
    * @param worker the Alluxio worker handle
    */
   public DataServerHandler(final AlluxioWorkerService worker) {
-    Preconditions.checkNotNull(worker);
+    Preconditions.checkNotNull(worker, "worker");
     mBlockHandler = new BlockDataServerHandler(worker.getBlockWorker());
     mUnderFileSystemHandler = new UnderFileSystemDataServerHandler(worker.getFileSystemWorker());
   }
@@ -82,9 +85,16 @@ final class DataServerHandler extends SimpleChannelInboundHandler<RPCMessage> {
         assert msg instanceof RPCErrorResponse;
         LOG.error("Received an error response from the client: " + msg.toString());
         break;
+      case RPC_READ_REQUEST:
+      case RPC_WRITE_REQUEST:
+      case RPC_RESPONSE:
+        assert msg instanceof RPCProtoMessage;
+        ctx.fireChannelRead(msg);
+        break;
       default:
         RPCErrorResponse resp = new RPCErrorResponse(RPCResponse.Status.UNKNOWN_MESSAGE_ERROR);
         ctx.writeAndFlush(resp);
+        // TODO(peis): Fix this. We should not throw an exception here.
         throw new IllegalArgumentException(
             "No handler implementation for rpc msg type: " + msg.getType());
     }
@@ -93,6 +103,11 @@ final class DataServerHandler extends SimpleChannelInboundHandler<RPCMessage> {
   @Override
   public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) throws Exception {
     LOG.warn("Exception thrown while processing request", cause);
-    ctx.close();
+    // TODO(peis): This doesn't have to be decode error, it can also be any network errors such as
+    // connection reset. Fix this ALLUXIO-2235.
+    RPCErrorResponse resp = new RPCErrorResponse(RPCResponse.Status.DECODE_ERROR);
+    ChannelFuture channelFuture = ctx.writeAndFlush(resp);
+    // Close the channel because it is likely a network error.
+    channelFuture.addListener(ChannelFutureListener.CLOSE);
   }
 }

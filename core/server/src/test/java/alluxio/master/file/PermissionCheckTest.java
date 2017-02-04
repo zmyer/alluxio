@@ -19,32 +19,45 @@ import alluxio.PropertyKey;
 import alluxio.exception.AccessControlException;
 import alluxio.exception.ExceptionMessage;
 import alluxio.exception.FileDoesNotExistException;
-import alluxio.master.MasterContext;
-import alluxio.master.MasterSource;
 import alluxio.master.block.BlockMaster;
+import alluxio.master.file.meta.Inode;
+import alluxio.master.file.meta.InodeDirectory;
+import alluxio.master.file.meta.InodeFile;
+import alluxio.master.file.meta.InodeTree;
+import alluxio.master.file.meta.LockedInodePath;
+import alluxio.master.file.meta.MutableLockedInodePath;
 import alluxio.master.file.options.CompleteFileOptions;
 import alluxio.master.file.options.CreateDirectoryOptions;
 import alluxio.master.file.options.CreateFileOptions;
+import alluxio.master.file.options.FreeOptions;
 import alluxio.master.file.options.ListStatusOptions;
+import alluxio.master.file.options.RenameOptions;
 import alluxio.master.file.options.SetAttributeOptions;
-import alluxio.master.journal.Journal;
-import alluxio.master.journal.ReadWriteJournal;
+import alluxio.master.journal.JournalFactory;
+import alluxio.security.GroupMappingServiceTestUtils;
+import alluxio.security.LoginUserTestUtils;
 import alluxio.security.authentication.AuthType;
 import alluxio.security.authentication.AuthenticatedClientUser;
 import alluxio.security.authorization.Mode;
-import alluxio.security.authorization.Permission;
 import alluxio.security.group.GroupMappingService;
+import alluxio.util.CommonUtils;
+import alluxio.util.SecurityUtils;
 import alluxio.util.io.PathUtils;
 import alluxio.wire.FileInfo;
+import alluxio.wire.TtlAction;
 
 import com.google.common.collect.Lists;
+import org.apache.commons.lang3.tuple.ImmutableTriple;
+import org.apache.commons.lang3.tuple.Triple;
 import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
+import org.junit.Ignore;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.ExpectedException;
 import org.junit.rules.TemporaryFolder;
+import org.mockito.Mockito;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -55,6 +68,7 @@ import java.util.List;
  * Unit test for {@link FileSystemMaster} when permission check is enabled by configure
  * alluxio.security.authorization.permission.enabled=true.
  */
+@Ignore("https://alluxio.atlassian.net/browse/ALLUXIO-2426")
 public final class PermissionCheckTest {
   private static final String TEST_SUPER_GROUP = "test-supergroup";
 
@@ -83,7 +97,12 @@ public final class PermissionCheckTest {
   private static final String TEST_DIR_FILE_URI = "/testDir/file";
   private static final String TEST_FILE_URI = "/testFile";
 
+  private static final Mode TEST_DIR_MODE = new Mode((short) 0755);
+  private static final Mode TEST_FILE_MODE = new Mode((short) 0755);
+
   private FileSystemMaster mFileSystemMaster;
+
+  private InodeTree mInodeTree;
 
   @Rule
   public TemporaryFolder mTestFolder = new TemporaryFolder();
@@ -96,31 +115,34 @@ public final class PermissionCheckTest {
    */
   private static final class TestUser {
     private String mUser;
-    private String mGroups;
+    private String mGroup;
 
-    TestUser(String user, String groups) {
+    TestUser(String user, String group) {
       mUser = user;
-      mGroups = groups;
+      mGroup = group;
     }
 
     String getUser() {
       return mUser;
     }
 
-    String getGroups() {
-      return mGroups;
+    String getGroup() {
+      return mGroup;
     }
   }
 
+  /**
+   * A mapping from a user to its corresponding group.
+   */
   public static class FakeUserGroupsMapping implements GroupMappingService {
     private HashMap<String, String> mUserGroups = new HashMap<>();
 
     public FakeUserGroupsMapping() {
-      mUserGroups.put(TEST_USER_ADMIN.getUser(), TEST_USER_ADMIN.getGroups());
-      mUserGroups.put(TEST_USER_1.getUser(), TEST_USER_1.getGroups());
-      mUserGroups.put(TEST_USER_2.getUser(), TEST_USER_2.getGroups());
-      mUserGroups.put(TEST_USER_3.getUser(), TEST_USER_3.getGroups());
-      mUserGroups.put(TEST_USER_SUPERGROUP.getUser(), TEST_USER_SUPERGROUP.getGroups());
+      mUserGroups.put(TEST_USER_ADMIN.getUser(), TEST_USER_ADMIN.getGroup());
+      mUserGroups.put(TEST_USER_1.getUser(), TEST_USER_1.getGroup());
+      mUserGroups.put(TEST_USER_2.getUser(), TEST_USER_2.getGroup());
+      mUserGroups.put(TEST_USER_3.getUser(), TEST_USER_3.getGroup());
+      mUserGroups.put(TEST_USER_SUPERGROUP.getUser(), TEST_USER_SUPERGROUP.getGroup());
     }
 
     @Override
@@ -134,6 +156,8 @@ public final class PermissionCheckTest {
 
   @Before
   public void before() throws Exception {
+    LoginUserTestUtils.resetLoginUser();
+    GroupMappingServiceTestUtils.resetCache();
     // authentication
     Configuration.set(PropertyKey.SECURITY_AUTHENTICATION_TYPE, AuthType.SIMPLE.getAuthName());
     Configuration.set(PropertyKey.SECURITY_LOGIN_USERNAME, "admin");
@@ -143,21 +167,24 @@ public final class PermissionCheckTest {
     Configuration.set(PropertyKey.SECURITY_AUTHORIZATION_PERMISSION_ENABLED, "true");
     Configuration.set(PropertyKey.SECURITY_AUTHORIZATION_PERMISSION_SUPERGROUP, TEST_SUPER_GROUP);
 
-    Journal blockJournal = new ReadWriteJournal(mTestFolder.newFolder().getAbsolutePath());
-    Journal fsJournal = new ReadWriteJournal(mTestFolder.newFolder().getAbsolutePath());
-    MasterContext masterContext = new MasterContext(new MasterSource());
-    BlockMaster blockMaster = new BlockMaster(masterContext, blockJournal);
+    JournalFactory journalFactory =
+        new JournalFactory.ReadWrite(mTestFolder.newFolder().getAbsolutePath());
+    BlockMaster blockMaster = new BlockMaster(journalFactory);
 
-    mFileSystemMaster = new FileSystemMaster(masterContext, blockMaster, fsJournal);
+    mFileSystemMaster = new FileSystemMaster(blockMaster, journalFactory);
 
     blockMaster.start(true);
     mFileSystemMaster.start(true);
 
     createDirAndFileForTest();
+
+    mInodeTree = Mockito.mock(InodeTree.class);
+    Mockito.when(mInodeTree.getRootUserName()).thenReturn("admin");
   }
 
   @After
   public void after() throws Exception {
+    AuthenticatedClientUser.remove();
     ConfigurationTestUtils.resetConfiguration();
   }
 
@@ -171,20 +198,65 @@ public final class PermissionCheckTest {
   private void createDirAndFileForTest() throws Exception {
     // create "/testDir" for user1
     AuthenticatedClientUser.set(TEST_USER_ADMIN.getUser());
-    mFileSystemMaster.createDirectory(new AlluxioURI("/testDir"), CreateDirectoryOptions.defaults()
-        .setPermission(new Permission(TEST_USER_1.getUser(), "group1", (short) 0755)));
+    mFileSystemMaster.createDirectory(new AlluxioURI("/testDir"),
+        CreateDirectoryOptions.defaults().setOwner(TEST_USER_1.getUser())
+            .setGroup(TEST_USER_1.getGroup()).setMode(TEST_DIR_MODE));
 
     // create "/testDir/file" for user1
     AuthenticatedClientUser.set(TEST_USER_1.getUser());
     mFileSystemMaster.createFile(new AlluxioURI("/testDir/file"),
         CreateFileOptions.defaults().setBlockSizeBytes(Constants.KB)
-            .setPermission(new Permission(TEST_USER_1.getUser(), "group1", (short) 0644)));
+            .setOwner(TEST_USER_1.getUser())
+            .setGroup(TEST_USER_1.getGroup()).setMode(TEST_FILE_MODE));
 
     // create "/testFile" for user2
     AuthenticatedClientUser.set(TEST_USER_ADMIN.getUser());
     mFileSystemMaster.createFile(new AlluxioURI("/testFile"),
         CreateFileOptions.defaults().setBlockSizeBytes(Constants.KB)
-            .setPermission(new Permission(TEST_USER_2.getUser(), "group2", (short) 0644)));
+            .setOwner(TEST_USER_2.getUser())
+            .setGroup(TEST_USER_2.getGroup()).setMode(TEST_FILE_MODE));
+  }
+
+  private InodeDirectory getRootInode() {
+    return InodeDirectory.create(0, -1, "",
+        CreateDirectoryOptions.defaults().setOwner(TEST_USER_ADMIN.getUser())
+            .setGroup(TEST_USER_ADMIN.getGroup()).setMode(TEST_DIR_MODE));
+  }
+
+  @Test
+  public void getPermissionOwner() throws Exception {
+    ArrayList<Triple<String, String, Mode>> permissions = new ArrayList<>();
+    permissions.add(new ImmutableTriple<>(TEST_USER_1.getUser(), TEST_USER_1.getGroup(),
+        new Mode((short) 0754)));
+    LockedInodePath lockedInodePath = getLockedInodePath(permissions);
+    AuthenticatedClientUser.set(TEST_USER_1.getUser());
+    PermissionChecker checker = new PermissionChecker(mInodeTree);
+    Mode.Bits actual = checker.getPermission(lockedInodePath);
+    Assert.assertEquals(Mode.Bits.ALL, actual);
+  }
+
+  @Test
+  public void getPermissionGroup() throws Exception {
+    ArrayList<Triple<String, String, Mode>> permissions = new ArrayList<>();
+    permissions.add(new ImmutableTriple<>(TEST_USER_1.getUser(), TEST_USER_1.getGroup(),
+        new Mode((short) 0754)));
+    LockedInodePath lockedInodePath = getLockedInodePath(permissions);
+    AuthenticatedClientUser.set(TEST_USER_3.getUser());
+    PermissionChecker checker = new PermissionChecker(mInodeTree);
+    Mode.Bits actual = checker.getPermission(lockedInodePath);
+    Assert.assertEquals(Mode.Bits.READ_EXECUTE, actual);
+  }
+
+  @Test
+  public void getPermissionOther() throws Exception {
+    ArrayList<Triple<String, String, Mode>> permissions = new ArrayList<>();
+    permissions.add(new ImmutableTriple<>(TEST_USER_1.getUser(), TEST_USER_1.getGroup(),
+        new Mode((short) 0754)));
+    LockedInodePath lockedInodePath = getLockedInodePath(permissions);
+    AuthenticatedClientUser.set(TEST_USER_2.getUser());
+    PermissionChecker checker = new PermissionChecker(mInodeTree);
+    Mode.Bits actual = checker.getPermission(lockedInodePath);
+    Assert.assertEquals(Mode.Bits.READ, actual);
   }
 
   /**
@@ -231,7 +303,8 @@ public final class PermissionCheckTest {
   private void verifyCreateFile(TestUser user, String path, boolean recursive) throws Exception {
     AuthenticatedClientUser.set(user.getUser());
     CreateFileOptions options = CreateFileOptions.defaults().setRecursive(recursive)
-        .setPermission(Permission.defaults().setOwnerFromThriftClient());
+        .setOwner(SecurityUtils.getOwnerFromThriftClient())
+        .setGroup(SecurityUtils.getGroupFromThriftClient());
 
     long fileId = mFileSystemMaster.createFile(new AlluxioURI(path), options);
 
@@ -285,7 +358,8 @@ public final class PermissionCheckTest {
       throws Exception {
     AuthenticatedClientUser.set(user.getUser());
     CreateDirectoryOptions options = CreateDirectoryOptions.defaults().setRecursive(recursive)
-        .setPermission(Permission.defaults().setOwnerFromThriftClient());
+        .setOwner(SecurityUtils.getOwnerFromThriftClient())
+        .setGroup(SecurityUtils.getGroupFromThriftClient());
     mFileSystemMaster.createDirectory(new AlluxioURI(path), options);
 
     FileInfo fileInfo =
@@ -362,7 +436,8 @@ public final class PermissionCheckTest {
         mFileSystemMaster.getFileInfo(mFileSystemMaster.getFileId(new AlluxioURI(srcPath)))
             .getOwner();
 
-    mFileSystemMaster.rename(new AlluxioURI(srcPath), new AlluxioURI(dstPath));
+    mFileSystemMaster
+        .rename(new AlluxioURI(srcPath), new AlluxioURI(dstPath), RenameOptions.defaults());
 
     Assert.assertEquals(-1, mFileSystemMaster.getFileId(new AlluxioURI(srcPath)));
     FileInfo fileInfo =
@@ -563,6 +638,7 @@ public final class PermissionCheckTest {
     SetAttributeOptions result = verifySetState(TEST_USER_2, file, expect);
 
     Assert.assertEquals(expect.getTtl(), result.getTtl());
+    Assert.assertEquals(expect.getTtlAction(), result.getTtlAction());
     Assert.assertEquals(expect.getPinned(), result.getPinned());
   }
 
@@ -585,7 +661,8 @@ public final class PermissionCheckTest {
     boolean recursive = true;
     long ttl = 11;
 
-    return SetAttributeOptions.defaults().setPinned(recursive).setTtl(ttl);
+    return SetAttributeOptions.defaults().setPinned(recursive).setTtl(ttl)
+        .setTtlAction(TtlAction.DELETE);
   }
 
   private SetAttributeOptions verifySetState(TestUser user, String path,
@@ -685,7 +762,7 @@ public final class PermissionCheckTest {
 
   private void verifyFree(TestUser user, String path, boolean recursive) throws Exception {
     AuthenticatedClientUser.set(user.getUser());
-    mFileSystemMaster.free(new AlluxioURI(path), recursive);
+    mFileSystemMaster.free(new AlluxioURI(path), FreeOptions.defaults().setRecursive(recursive));
   }
 
   @Test
@@ -707,20 +784,20 @@ public final class PermissionCheckTest {
   @Test
   public void setGroupSuccess() throws Exception {
     // super user
-    verifySetAcl(TEST_USER_ADMIN, TEST_FILE_URI, null, TEST_USER_1.getGroups(), (short) -1, false);
+    verifySetAcl(TEST_USER_ADMIN, TEST_FILE_URI, null, TEST_USER_1.getGroup(), (short) -1, false);
 
     // super group
-    verifySetAcl(TEST_USER_SUPERGROUP, TEST_DIR_URI, null, TEST_USER_2.getGroups(), (short) -1,
+    verifySetAcl(TEST_USER_SUPERGROUP, TEST_DIR_URI, null, TEST_USER_2.getGroup(), (short) -1,
         true);
     FileInfo fileInfo = mFileSystemMaster
         .getFileInfo(mFileSystemMaster.getFileId(new AlluxioURI(TEST_DIR_FILE_URI)));
-    Assert.assertEquals(TEST_USER_2.getGroups(), fileInfo.getGroup());
+    Assert.assertEquals(TEST_USER_2.getGroup(), fileInfo.getGroup());
 
     // owner
-    verifySetAcl(TEST_USER_1, TEST_DIR_URI, null, TEST_USER_2.getGroups(), (short) -1, true);
+    verifySetAcl(TEST_USER_1, TEST_DIR_URI, null, TEST_USER_2.getGroup(), (short) -1, true);
     fileInfo = mFileSystemMaster
         .getFileInfo(mFileSystemMaster.getFileId(new AlluxioURI(TEST_DIR_FILE_URI)));
-    Assert.assertEquals(TEST_USER_2.getGroups(), fileInfo.getGroup());
+    Assert.assertEquals(TEST_USER_2.getGroup(), fileInfo.getGroup());
   }
 
   @Test
@@ -729,7 +806,7 @@ public final class PermissionCheckTest {
     mThrown.expectMessage(ExceptionMessage.PERMISSION_DENIED.getMessage(
         "user=" + TEST_USER_1.getUser() + " is not the owner of path=" + TEST_FILE_URI));
 
-    verifySetAcl(TEST_USER_1, TEST_FILE_URI, null, TEST_USER_1.getGroups(), (short) -1, false);
+    verifySetAcl(TEST_USER_1, TEST_FILE_URI, null, TEST_USER_1.getGroup(), (short) -1, false);
   }
 
   @Test
@@ -765,14 +842,14 @@ public final class PermissionCheckTest {
   @Test
   public void setAclSuccess() throws Exception {
     // super user sets owner, group, and permission
-    verifySetAcl(TEST_USER_ADMIN, TEST_FILE_URI, TEST_USER_1.getUser(), TEST_USER_1.getGroups(),
+    verifySetAcl(TEST_USER_ADMIN, TEST_FILE_URI, TEST_USER_1.getUser(), TEST_USER_1.getGroup(),
         (short) 0600, false);
 
     // owner sets group and permission
-    verifySetAcl(TEST_USER_1, TEST_DIR_URI, null, TEST_USER_2.getGroups(), (short) 0777, true);
+    verifySetAcl(TEST_USER_1, TEST_DIR_URI, null, TEST_USER_2.getGroup(), (short) 0777, true);
     FileInfo fileInfo = mFileSystemMaster
         .getFileInfo(mFileSystemMaster.getFileId(new AlluxioURI(TEST_DIR_FILE_URI)));
-    Assert.assertEquals(TEST_USER_2.getGroups(), fileInfo.getGroup());
+    Assert.assertEquals(TEST_USER_2.getGroup(), fileInfo.getGroup());
     Assert.assertEquals((short) 0777, fileInfo.getMode());
   }
 
@@ -781,7 +858,7 @@ public final class PermissionCheckTest {
     mThrown.expect(AccessControlException.class);
     mThrown.expectMessage(TEST_USER_2.getUser() + " is not a super user or in super group");
 
-    verifySetAcl(TEST_USER_2, TEST_FILE_URI, TEST_USER_1.getUser(), TEST_USER_1.getGroups(),
+    verifySetAcl(TEST_USER_2, TEST_FILE_URI, TEST_USER_1.getUser(), TEST_USER_1.getGroup(),
         (short) 0600, false);
   }
 
@@ -814,5 +891,33 @@ public final class PermissionCheckTest {
             .append(bits).append(", ").append("path=").append(path).append(": ")
             .append("failed at ").append(inodeName);
     return stringBuilder.toString();
+  }
+
+  private LockedInodePath getLockedInodePath(ArrayList<Triple<String, String, Mode>> permissions)
+      throws Exception {
+    List<Inode<?>> inodes = new ArrayList<>();
+    inodes.add(getRootInode());
+    if (permissions.size() == 0) {
+      return new MutableLockedInodePath(new AlluxioURI("/"), inodes, null);
+    }
+    String uri = "";
+    for (int i = 0; i < permissions.size(); i++) {
+      Triple<String, String, Mode> permission = permissions.get(i);
+      String owner = permission.getLeft();
+      String group = permission.getMiddle();
+      Mode mode = permission.getRight();
+      uri += "/" + (i + 1);
+      if (i == permissions.size() - 1) {
+        Inode<?> inode = InodeFile.create(i + 1, i, (i + 1) + "", CommonUtils.getCurrentMs(),
+            CreateFileOptions.defaults().setBlockSizeBytes(Constants.KB).setOwner(owner)
+                .setGroup(group).setMode(mode));
+        inodes.add(inode);
+      } else {
+        Inode<?> inode = InodeDirectory.create(i + 1, i, (i + 1) + "",
+            CreateDirectoryOptions.defaults().setOwner(owner).setGroup(group).setMode(mode));
+        inodes.add(inode);
+      }
+    }
+    return new MutableLockedInodePath(new AlluxioURI(uri), inodes, null);
   }
 }

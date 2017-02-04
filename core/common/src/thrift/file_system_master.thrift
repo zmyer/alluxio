@@ -3,6 +3,9 @@ namespace java alluxio.thrift
 include "common.thrift"
 include "exception.thrift"
 
+struct CheckConsistencyTOptions {
+}
+
 struct CompleteFileTOptions {
   1: optional i64 ufsLength
 }
@@ -11,6 +14,9 @@ struct CreateDirectoryTOptions {
   1: optional bool persisted
   2: optional bool recursive
   3: optional bool allowExists
+  4: optional i16 mode
+  5: optional i64 ttl
+  6: optional common.TTtlAction ttlAction
 }
 
 struct CreateFileTOptions {
@@ -18,6 +24,13 @@ struct CreateFileTOptions {
   2: optional bool persisted
   3: optional bool recursive
   4: optional i64 ttl
+  5: optional i16 mode
+  6: optional common.TTtlAction ttlAction
+}
+
+struct FreeTOptions {
+  1: optional bool recursive
+  2: optional bool forced
 }
 
 struct MountTOptions {
@@ -72,6 +85,7 @@ struct FileInfo {
   21: string persistenceState
   22: bool mountPoint
   23: list<FileBlockInfo> fileBlockInfos
+  24: common.TTtlAction ttlAction
 }
 
 struct FileSystemCommand {
@@ -96,6 +110,7 @@ struct SetAttributeTOptions {
   5: optional string group
   6: optional i16 mode
   7: optional bool recursive
+  8: optional common.TTtlAction ttlAction
 }
 
 union FileSystemCommandOptions {
@@ -108,31 +123,50 @@ union FileSystemCommandOptions {
 service FileSystemMasterClientService extends common.AlluxioService {
 
   /**
+   * Checks the consistency of the files and directores with the path as the root of the subtree
+   */
+  list<string> checkConsistency(
+    /** the root of the subtree to check */ 1: string path,
+    /** the method options */ 2: CheckConsistencyTOptions options,
+    )
+    throws (1: exception.AlluxioTException e, 2: exception.ThriftIOException ioe)
+
+  /**
    * Marks a file as completed.
    */
-  void completeFile( /** the path of the file */ 1: string path,
-      /** the method options */ 2: CompleteFileTOptions options)
+  void completeFile(
+    /** the path of the file */ 1: string path,
+    /** the method options */ 2: CompleteFileTOptions options,
+    )
     throws (1: exception.AlluxioTException e)
 
   /**
    * Creates a directory.
    */
-  void createDirectory( /** the path of the directory */ 1: string path,
-      /** the method options */ 2: CreateDirectoryTOptions options)
+  void createDirectory(
+    /** the path of the directory */ 1: string path,
+    /** the method options */ 2: CreateDirectoryTOptions options,
+    )
     throws (1: exception.AlluxioTException e, 2: exception.ThriftIOException ioe)
 
   /**
    * Creates a file.
    */
-  void createFile( /** the path of the file */ 1: string path,
-      /** the options for creating the file */ 2: CreateFileTOptions options)
+  void createFile(
+    /** the path of the file */ 1: string path,
+    /** the options for creating the file */ 2: CreateFileTOptions options,
+    )
     throws (1: exception.AlluxioTException e, 2: exception.ThriftIOException ioe)
 
   /**
    * Frees the given file or directory from Alluxio.
    */
-  void free( /** the path of the file or directory */ 1: string path,
-      /** whether to free recursively */ 2: bool recursive)
+  void free(
+    /** the path of the file or directory */ 1: string path,
+    // This is deprecated since 1.5 and will be removed in 2.0. Use FreeTOptions.
+    /** whether to free recursively */ 2: bool recursive,
+    /** the options for freeing a path */ 3: FreeTOptions options,
+    )
     throws (1: exception.AlluxioTException e)
 
   /**
@@ -140,13 +174,17 @@ service FileSystemMasterClientService extends common.AlluxioService {
    *
    * THIS METHOD IS DEPRECATED SINCE VERSION 1.1 AND WILL BE REMOVED IN VERSION 2.0.
    */
-  list<FileBlockInfo> getFileBlockInfoList( /** the path of the file */ 1: string path)
+  list<FileBlockInfo> getFileBlockInfoList(
+    /** the path of the file */ 1: string path,
+    )
     throws (1: exception.AlluxioTException e)
 
   /**
    * Returns the status of the file or directory.
    */
-  FileInfo getStatus( /** the path of the file or directory */ 1: string path)
+  FileInfo getStatus(
+    /** the path of the file or directory */ 1: string path,
+    )
     throws (1: exception.AlluxioTException e)
 
   /**
@@ -154,13 +192,17 @@ service FileSystemMasterClientService extends common.AlluxioService {
    *
    * THIS METHOD IS DEPRECATED SINCE VERSION 1.1 AND WILL BE REMOVED IN VERSION 2.0.
    */
-  FileInfo getStatusInternal( /** the id of the file or directory */ 1: i64 fileId)
+  FileInfo getStatusInternal(
+    /** the id of the file or directory */ 1: i64 fileId,
+    )
     throws (1: exception.AlluxioTException e)
 
   /**
    * Generates a new block id for the given file.
    */
-  i64 getNewBlockIdForFile( /** the path of the file */ 1: string path)
+  i64 getNewBlockIdForFile(
+    /** the path of the file */ 1: string path,
+    )
     throws (1: exception.AlluxioTException e)
 
   /**
@@ -168,15 +210,17 @@ service FileSystemMasterClientService extends common.AlluxioService {
    *
    * THIS METHOD IS DEPRECATED SINCE VERSION 1.1 AND WILL BE REMOVED IN VERSION 2.0.
    */
-  string getUfsAddress()
+  string getUfsAddress() throws (1: exception.AlluxioTException e)
 
   /**
    * If the path points to a file, the method returns a singleton with its file information.
    * If the path points to a directory, the method returns a list with file information for the
    * directory contents.
    */
-  list<FileInfo> listStatus( /** the path of the file or directory */ 1: string path,
-      /** listStatus options */ 2: ListStatusTOptions options)
+  list<FileInfo> listStatus(
+    /** the path of the file or directory */ 1: string path,
+    /** listStatus options */ 2: ListStatusTOptions options,
+    )
     throws (1: exception.AlluxioTException e)
 
   /**
@@ -184,45 +228,57 @@ service FileSystemMasterClientService extends common.AlluxioService {
    *
    * THIS METHOD IS DEPRECATED SINCE VERSION 1.1 AND WILL BE REMOVED IN VERSION 2.0.
    */
-  i64 loadMetadata( /** the path of the under file system */ 1: string ufsPath,
-      /** whether to load meta data recursively */ 2: bool recursive)
+  i64 loadMetadata(
+    /** the path of the under file system */ 1: string ufsPath,
+    /** whether to load metadata recursively */ 2: bool recursive,
+    )
     throws (1: exception.AlluxioTException e, 2: exception.ThriftIOException ioe)
 
   /**
    * Creates a new "mount point", mounts the given UFS path in the Alluxio namespace at the given
    * path. The path should not exist and should not be nested under any existing mount point.
    */
-  void mount( /** the path of alluxio mount point */ 1: string alluxioPath,
-      /** the path of the under file system */ 2: string ufsPath,
-      /** the options for creating the mount point */ 3: MountTOptions options)
+  void mount(
+    /** the path of alluxio mount point */ 1: string alluxioPath,
+    /** the path of the under file system */ 2: string ufsPath,
+    /** the options for creating the mount point */ 3: MountTOptions options,
+    )
     throws (1: exception.AlluxioTException e, 2: exception.ThriftIOException ioe)
 
   /**
    * Deletes a file or a directory and returns whether the remove operation succeeded.
    * NOTE: Unfortunately, the method cannot be called "delete" as that is a reserved Thrift keyword.
    */
-  void remove( /** the path of the file or directory */ 1: string path,
-      /** whether to remove recursively */ 2: bool recursive)
+  void remove(
+    /** the path of the file or directory */ 1: string path,
+    /** whether to remove recursively */ 2: bool recursive,
+    )
     throws (1: exception.AlluxioTException e)
 
   /**
    * Renames a file or a directory.
    */
-  void rename( /** the path of the file or directory */ 1: string path,
-      /** the desinationpath of the file */ 2: string dstPath)
+  void rename(
+    /** the path of the file or directory */ 1: string path,
+    /** the desinationpath of the file */ 2: string dstPath,
+    )
     throws (1: exception.AlluxioTException e, 2: exception.ThriftIOException ioe)
 
   /**
    * Sets file or directory attributes.
    */
-  void setAttribute( /** the path of the file or directory */ 1: string path,
-       /** the method options */ 2: SetAttributeTOptions options)
+  void setAttribute(
+    /** the path of the file or directory */ 1: string path,
+    /** the method options */ 2: SetAttributeTOptions options,
+    )
     throws (1: exception.AlluxioTException e)
 
   /**
    * Schedules async persistence.
    */
-  void scheduleAsyncPersist( /** the path of the file */ 1: string path)
+  void scheduleAsyncPersist(
+    /** the path of the file */ 1: string path,
+    )
     throws (1: exception.AlluxioTException e)
 
   /**
@@ -230,7 +286,9 @@ service FileSystemMasterClientService extends common.AlluxioService {
    * should correspond to an existing mount point. Any files in its subtree that are backed by UFS
    * will be persisted before they are removed from the Alluxio namespace.
    */
-  void unmount( /** the path of the alluxio mount point */ 1: string alluxioPath)
+  void unmount(
+    /** the path of the alluxio mount point */ 1: string alluxioPath,
+    )
     throws (1: exception.AlluxioTException e, 2: exception.ThriftIOException ioe)
 }
 
@@ -242,19 +300,23 @@ service FileSystemMasterWorkerService extends common.AlluxioService {
   /*
    * Returns the file information for a file or directory identified by the given file id.
    */
-  FileInfo getFileInfo( /** the id of the file */ 1: i64 fileId)
+  FileInfo getFileInfo(
+    /** the id of the file */ 1: i64 fileId,
+    )
     throws (1: exception.AlluxioTException e)
 
   /**
    * Returns the set of pinned files.
    */
-  set<i64> getPinIdList()
+  set<i64> getPinIdList() throws (1: exception.AlluxioTException e)
 
   /**
    * Periodic file system worker heartbeat. Returns the command for persisting
    * the blocks of a file.
    */
-  FileSystemCommand heartbeat( /** the id of the worker */ 1: i64 workerId,
-      /** the list of persisted files */ 2: list<i64> persistedFiles)
+  FileSystemCommand heartbeat(
+    /** the id of the worker */ 1: i64 workerId,
+    /** the list of persisted files */ 2: list<i64> persistedFiles,
+    )
     throws (1: exception.AlluxioTException e)
 }

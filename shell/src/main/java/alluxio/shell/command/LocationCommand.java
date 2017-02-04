@@ -29,7 +29,6 @@ import javax.annotation.concurrent.ThreadSafe;
  */
 @ThreadSafe
 public final class LocationCommand extends WithWildCardPathCommand {
-
   /**
    * Constructs a new instance to display a list of hosts that have the file specified in args
    * stored.
@@ -46,12 +45,13 @@ public final class LocationCommand extends WithWildCardPathCommand {
   }
 
   @Override
-  void runCommand(AlluxioURI path, CommandLine cl) throws AlluxioException, IOException {
+  protected void runCommand(AlluxioURI path, CommandLine cl) throws AlluxioException, IOException {
     URIStatus status = mFileSystem.getStatus(path);
 
     System.out.println(path + " with file id " + status.getFileId() + " is on nodes: ");
+    AlluxioBlockStore blockStore = AlluxioBlockStore.create();
     for (long blockId : status.getBlockIds()) {
-      for (BlockLocation location : AlluxioBlockStore.get().getInfo(blockId).getLocations()) {
+      for (BlockLocation location : blockStore.getInfo(blockId).getLocations()) {
         System.out.println(location.getWorkerAddress().getHost());
       }
     }

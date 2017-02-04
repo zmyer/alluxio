@@ -12,17 +12,22 @@
 package alluxio.client.block;
 
 import alluxio.client.RemoteBlockReader;
-import alluxio.exception.ConnectionFailedException;
-import alluxio.exception.ExceptionMessage;
+import alluxio.client.file.FileSystemContext;
+import alluxio.client.file.options.InStreamOptions;
+import alluxio.exception.AlluxioException;
+import alluxio.metrics.MetricsSystem;
 import alluxio.wire.LockBlockResult;
 import alluxio.wire.WorkerNetAddress;
-import alluxio.worker.ClientMetrics;
+
+import com.codahale.metrics.Counter;
+import com.google.common.io.Closer;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
 
 import javax.annotation.concurrent.NotThreadSafe;
+import javax.annotation.concurrent.ThreadSafe;
 
 /**
  * This class provides a streaming API to read a block in Alluxio. The data will be transferred
@@ -30,6 +35,8 @@ import javax.annotation.concurrent.NotThreadSafe;
  */
 @NotThreadSafe
 public final class RemoteBlockInStream extends BufferedBlockInStream {
+  /** Used to manage closeable resources. */
+  private final Closer mCloser;
   /** The address of the worker to read the data from. */
   private final WorkerNetAddress mWorkerNetAddress;
   /** mWorkerNetAddress converted to an InetSocketAddress. */
@@ -39,9 +46,10 @@ public final class RemoteBlockInStream extends BufferedBlockInStream {
 
   /** Client to communicate with the remote worker. */
   private final BlockWorkerClient mBlockWorkerClient;
-  /** The block store context which provides block worker clients. */
-  private final BlockStoreContext mContext;
-  private final ClientMetrics mMetrics;
+  /** The file system context which provides block worker clients. */
+  private final FileSystemContext mContext;
+  /** {@link RemoteBlockReader} for this instance. */
+  private RemoteBlockReader mReader;
 
   /**
    * Creates a new remote block input stream.
@@ -49,28 +57,29 @@ public final class RemoteBlockInStream extends BufferedBlockInStream {
    * @param blockId the block id
    * @param blockSize the block size
    * @param workerNetAddress the worker address
-   * @param context the block store context to use for acquiring worker and master clients
+   * @param context the file system context to use for acquiring worker and master clients
+   * @param options the instream options
    * @throws IOException if the block is not available on the remote worker
    */
   public RemoteBlockInStream(long blockId, long blockSize, WorkerNetAddress workerNetAddress,
-      BlockStoreContext context) throws IOException {
+      FileSystemContext context, InStreamOptions options) throws IOException {
     super(blockId, blockSize);
     mWorkerNetAddress = workerNetAddress;
     mWorkerInetSocketAddress =
         new InetSocketAddress(workerNetAddress.getHost(), workerNetAddress.getDataPort());
 
     mContext = context;
-    mBlockWorkerClient = mContext.acquireWorkerClient(workerNetAddress);
+    mCloser = Closer.create();
 
     try {
+      mBlockWorkerClient = mCloser.register(mContext.createBlockWorkerClient(workerNetAddress));
       LockBlockResult result = mBlockWorkerClient.lockBlock(blockId);
-      if (result == null) {
-        throw new IOException(ExceptionMessage.BLOCK_UNAVAILABLE.getMessage(blockId));
-      }
       mLockId = result.getLockId();
-      mMetrics = mBlockWorkerClient.getClientMetrics();
+    } catch (AlluxioException e) {
+      mCloser.close();
+      throw new IOException(e);
     } catch (IOException e) {
-      mContext.releaseWorkerClient(mBlockWorkerClient);
+      mCloser.close();
       throw e;
     }
   }
@@ -78,7 +87,7 @@ public final class RemoteBlockInStream extends BufferedBlockInStream {
   @Override
   public void seek(long pos) throws IOException {
     super.seek(pos);
-    mMetrics.incSeeksRemote(1);
+    Metrics.SEEKS_REMOTE.inc();
   }
 
   @Override
@@ -88,16 +97,16 @@ public final class RemoteBlockInStream extends BufferedBlockInStream {
     }
 
     if (mBlockIsRead) {
-      mMetrics.incBlocksReadRemote(1);
+      Metrics.BLOCKS_READ_REMOTE.inc();
     }
     try {
       mBlockWorkerClient.unlockBlock(mBlockId);
-    } catch (ConnectionFailedException e) {
-      throw new IOException(e);
+    } catch (Throwable e) { // must catch Throwable
+      throw mCloser.rethrow(e); // IOException will be thrown as-is
     } finally {
-      mContext.releaseWorkerClient(mBlockWorkerClient);
+      mClosed = true;
+      mCloser.close();
     }
-    mClosed = true;
   }
 
   @Override
@@ -119,7 +128,7 @@ public final class RemoteBlockInStream extends BufferedBlockInStream {
    */
   @Override
   protected void incrementBytesReadMetric(int bytes) {
-    mMetrics.incBytesReadRemote(bytes);
+    Metrics.BYTES_READ_REMOTE.inc(bytes);
   }
 
   /**
@@ -143,17 +152,32 @@ public final class RemoteBlockInStream extends BufferedBlockInStream {
     // read up to the end of the block.
     int toRead = (int) Math.min(len, remaining());
     int bytesLeft = toRead;
+
+    if (mReader == null) {
+      mReader = mCloser.register(RemoteBlockReader.Factory.create(mContext));
+    }
+
     while (bytesLeft > 0) {
-      // TODO(calvin): Fix needing to recreate reader each time.
-      try (RemoteBlockReader reader = RemoteBlockReader.Factory.create()) {
-        ByteBuffer data = reader.readRemoteBlock(mWorkerInetSocketAddress, mBlockId, getPosition(),
-            bytesLeft, mLockId, mBlockWorkerClient.getSessionId());
-        int bytesRead = data.remaining();
-        data.get(b, off, bytesRead);
-        bytesLeft -= bytesRead;
-      }
+      ByteBuffer data = mReader.readRemoteBlock(mWorkerInetSocketAddress, mBlockId, getPosition(),
+          bytesLeft, mLockId, mBlockWorkerClient.getSessionId());
+      int bytesRead = data.remaining();
+      data.get(b, off, bytesRead);
+      bytesLeft -= bytesRead;
     }
 
     return toRead;
+  }
+
+  /**
+   * Class that contains metrics about RemoteBlockInStream.
+   */
+  @ThreadSafe
+  private static final class Metrics {
+    private static final Counter BLOCKS_READ_REMOTE =
+        MetricsSystem.clientCounter("BlocksReadRemote");
+    private static final Counter BYTES_READ_REMOTE = MetricsSystem.clientCounter("BytesReadRemote");
+    private static final Counter SEEKS_REMOTE = MetricsSystem.clientCounter("SeeksRemote");
+
+    private Metrics() {} // prevent instantiation
   }
 }

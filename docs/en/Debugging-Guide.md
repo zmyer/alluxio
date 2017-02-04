@@ -23,6 +23,22 @@ Workers, when you ran into any issues. If you do not understand the error messag
 try to search them in the [Mailing List](https://groups.google.com/forum/#!forum/alluxio-users),
 in case the problem has been discussed before.
 
+## Alluxio remote debug
+
+Usually, Alluxio does not run on the development environment, which makes it difficult to debug Alluxio. We locate problem's method is 'log-build-deploy-scanlog', the efficiency of the problem localization is low and need to modify the code and trigger new deployment, which is not allowed in some time.
+
+Java remote debugging technology can make it simple to debug Alluxio in source level without modify any source. You need to append the JVM remote debugging parameters and then start debugging server. There are several ways to append the remote debugging parameters, the most convenient way is to modify the `alluxio-env.sh`, add the following configuration properties.
+
+```properties
+ALLUXIO_MASTER_JAVA_OPTS="-Xdebug -Xnoagent -Djava.compiler=NONE -Xrunjdwp:transport=dt_socket,server=y,suspend=n,address=6600 $ALLUXIO_JAVA_OPTS"
+
+ALLUXIO_WORKER_JAVA_OPTS="-Xdebug -Xnoagent -Djava.compiler=NONE -Xrunjdwp:transport=dt_socket,server=y,suspend=n,address=6601 $ALLUXIO_JAVA_OPTS"
+
+ALLUXIO_PROXY_JAVA_OPTS="-Xdebug -Xnoagent -Djava.compiler=NONE -Xrunjdwp:transport=dt_socket,server=y,suspend=n,address=6602 $ALLUXIO_JAVA_OPTS"
+```
+
+After start the master or worker, use eclipse or IntelliJ idea and other java ide, new a java remote configuration, set the debug server's host and port, then start debug session. If you set a breakpoint which can be reached, the ide will enter debug mode, you can read and write the current context's variables, call stack, thread list, expression evaluation. You can also execute debugging control instrument, such as 'step into', 'step over', 'resume', 'suspend' and so on. If you get this skill, you will locate problem faster, and will impressed by the source code you have debugged.
+
 ## Setup FAQ
 
 #### Q: I'm new to Alluxio and getting started. I failed to set up Alluxio on my local machine. What shall I do?
@@ -41,6 +57,7 @@ A: Please follow [Running-Alluxio-on-a-Cluster](Running-Alluxio-on-a-Cluster.htm
 [Configuring-Alluxio-with-HDFS](Configuring-Alluxio-with-HDFS.html).
 
 Tips:
+
 - Usually, the best performance gains occur when Alluxio workers are co-located with the nodes of the computation frameworks.
 - You can use Mesos and Yarn integration if you are already using Mesos or Yarn to manage your cluster. Using Mesos or Yarn can benefit management.
 - If the under storage is remote (like S3 or remote HDFS), using Alluxio can be especially beneficial.
@@ -57,6 +74,51 @@ bucket, without the `s3://`, `s3a://`, or `s3n://` prefix.
 
 
 ## Usage FAQ
+
+#### Q: Why do I see exceptions like "No FileSystem for scheme: alluxio"?
+
+A: This error message is seen when your applications (e.g., MapReduce, Spark) try to access
+Alluxio as an HDFS-compatible file system, but the `alluxio://` scheme is not recognized by the
+application. Please make sure your HDFS configuration file `core-site.xml` (in your default hadoop
+installation or `spark/conf/` if you customize this file for Spark) has the following property:
+
+```xml
+<configuration>
+  <property>
+    <name>fs.alluxio.impl</name>
+    <value>alluxio.hadoop.FileSystem</value>
+  </property>
+</configuration>
+```
+
+#### Q: Why do I see exceptions like "java.lang.RuntimeException: java.lang.ClassNotFoundException: Class alluxio.hadoop.FileSystem not found"?
+
+A: This error message is seen when your applications (e.g., MapReduce, Spark) try to access
+Alluxio as an HDFS-compatible file system, the `alluxio://` scheme has been
+configured correctly but the Alluxio client jar is not found on the classpath of your application.
+Depending on the computation frameworks, users usually need to add the Alluxio
+client jar to their class path of the framework through environment variables or
+properties on all nodes running this framework. Here are some examples:
+
+- For MapReduce jobs, you can append the client jar to `$HADOOP_CLASSPATH`:
+
+```bash
+$ export HADOOP_CLASSPATH={{site.ALLUXIO_CLIENT_JAR_PATH}}:${HADOOP_CLASSPATH}
+```
+
+- For Spark jobs, you can append the client jar to `$SPARK_CLASSPATH`:
+
+```bash
+$ export SPARK_CLASSPATH={{site.ALLUXIO_CLIENT_JAR_PATH}}:${SPARK_CLASSPATH}
+```
+
+Alternatively, add the following lines to `spark/conf/spark-defaults.conf`:
+
+```bash
+spark.driver.extraClassPath {{site.ALLUXIO_CLIENT_JAR_PATH}}
+spark.executor.extraClassPath
+{{site.ALLUXIO_CLIENT_JAR_PATH}}
+```
 
 #### Q: I'm seeing error messages like "Frame size (67108864) larger than max length (16777216)". What is wrong?
 

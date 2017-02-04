@@ -11,7 +11,7 @@
 
 package alluxio.master.file.options;
 
-import alluxio.security.authorization.Permission;
+import alluxio.security.authorization.Mode;
 
 import com.google.common.base.Objects;
 
@@ -26,7 +26,9 @@ import javax.annotation.concurrent.NotThreadSafe;
 public abstract class CreatePathOptions<T> {
   protected boolean mMountPoint;
   protected long mOperationTimeMs;
-  protected Permission mPermission;
+  protected String mOwner;
+  protected String mGroup;
+  protected Mode mMode;
   protected boolean mPersisted;
   // TODO(peis): Rename this to mCreateAncestors.
   protected boolean mRecursive;
@@ -35,7 +37,9 @@ public abstract class CreatePathOptions<T> {
   protected CreatePathOptions() {
     mMountPoint = false;
     mOperationTimeMs = System.currentTimeMillis();
-    mPermission = Permission.defaults();
+    mOwner = "";
+    mGroup = "";
+    mMode = Mode.defaults();
     mPersisted = false;
     mRecursive = false;
     mMetadataLoad = false;
@@ -58,10 +62,24 @@ public abstract class CreatePathOptions<T> {
   }
 
   /**
-   * @return the permission
+   * @return the owner
    */
-  public Permission getPermission() {
-    return mPermission;
+  public String getOwner() {
+    return mOwner;
+  }
+
+  /**
+   * @return the group
+   */
+  public String getGroup() {
+    return mGroup;
+  }
+
+  /**
+   * @return the mode
+   */
+  public Mode getMode() {
+    return mMode;
   }
 
   /**
@@ -106,11 +124,29 @@ public abstract class CreatePathOptions<T> {
   }
 
   /**
-   * @param permission the permission to use
+   * @param owner the owner to use
    * @return the updated options object
    */
-  public T setPermission(Permission permission) {
-    mPermission = permission;
+  public T setOwner(String owner) {
+    mOwner = owner;
+    return getThis();
+  }
+
+  /**
+   * @param group the group to use
+   * @return the updated options object
+   */
+  public T setGroup(String group) {
+    mGroup = group;
+    return getThis();
+  }
+
+  /**
+   * @param mode the mode to use
+   * @return the updated options object
+   */
+  public T setMode(Mode mode) {
+    mMode = mode;
     return getThis();
   }
 
@@ -154,22 +190,29 @@ public abstract class CreatePathOptions<T> {
     }
     CreatePathOptions<?> that = (CreatePathOptions<?>) o;
     return Objects.equal(mMountPoint, that.mMountPoint)
-        && Objects.equal(mPermission, that.mPermission)
+        && Objects.equal(mOwner, that.mOwner)
+        && Objects.equal(mGroup, that.mGroup)
+        && Objects.equal(mMode, that.mMode)
         && Objects.equal(mPersisted, that.mPersisted)
         && Objects.equal(mRecursive, that.mRecursive)
-        && Objects.equal(mMetadataLoad, that.mMetadataLoad);
+        && Objects.equal(mMetadataLoad, that.mMetadataLoad)
+        && mOperationTimeMs == that.mOperationTimeMs;
   }
 
   @Override
   public int hashCode() {
-    return Objects.hashCode(mMountPoint, mPermission, mPersisted, mRecursive, mMetadataLoad);
+    return Objects
+        .hashCode(mMountPoint, mOwner, mGroup, mMode, mPersisted, mRecursive, mMetadataLoad,
+            mOperationTimeMs);
   }
 
   protected Objects.ToStringHelper toStringHelper() {
     return Objects.toStringHelper(this)
         .add("mountPoint", mMountPoint)
         .add("operationTimeMs", mOperationTimeMs)
-        .add("permissionStatus", mPermission)
+        .add("owner", mOwner)
+        .add("group", mGroup)
+        .add("mode", mMode)
         .add("persisted", mPersisted)
         .add("recursive", mRecursive)
         .add("metadataLoad", mMetadataLoad);
