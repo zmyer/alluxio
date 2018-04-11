@@ -11,9 +11,12 @@
 
 package alluxio.security.authentication;
 
+import static org.junit.Assert.assertTrue;
+
 import alluxio.Configuration;
 import alluxio.ConfigurationTestUtils;
 import alluxio.PropertyKey;
+import alluxio.exception.status.UnauthenticatedException;
 import alluxio.util.network.NetworkAddressUtils;
 
 import org.apache.thrift.protocol.TBinaryProtocol;
@@ -23,7 +26,6 @@ import org.apache.thrift.transport.TTransport;
 import org.apache.thrift.transport.TTransportException;
 import org.apache.thrift.transport.TTransportFactory;
 import org.junit.After;
-import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -32,7 +34,6 @@ import org.junit.rules.ExpectedException;
 import java.net.InetSocketAddress;
 
 import javax.security.sasl.AuthenticationException;
-import javax.security.sasl.SaslException;
 
 /**
  * Unit test for methods of {@link TransportProvider}.
@@ -84,7 +85,7 @@ public final class TransportProviderTest {
     // create client and connect to server
     TTransport client = mTransportProvider.getClientTransport(mServerAddress);
     client.open();
-    Assert.assertTrue(client.isOpen());
+    assertTrue(client.isOpen());
 
     // clean up
     client.close();
@@ -106,7 +107,7 @@ public final class TransportProviderTest {
     // when connecting, authentication happens. It is a no-op in Simple mode.
     TTransport client = mTransportProvider.getClientTransport(mServerAddress);
     client.open();
-    Assert.assertTrue(client.isOpen());
+    assertTrue(client.isOpen());
 
     // clean up
     client.close();
@@ -122,7 +123,7 @@ public final class TransportProviderTest {
     mTransportProvider = TransportProvider.Factory.create();
 
     // check case that user is null
-    mThrown.expect(SaslException.class);
+    mThrown.expect(UnauthenticatedException.class);
     mThrown.expectMessage("PLAIN: authorization ID and password must be specified");
     ((PlainSaslTransportProvider) mTransportProvider)
         .getClientTransport(null, "whatever", mServerAddress);
@@ -137,7 +138,7 @@ public final class TransportProviderTest {
     mTransportProvider = TransportProvider.Factory.create();
 
     // check case that password is null
-    mThrown.expect(SaslException.class);
+    mThrown.expect(UnauthenticatedException.class);
     mThrown.expectMessage("PLAIN: authorization ID and password must be specified");
     ((PlainSaslTransportProvider) mTransportProvider)
         .getClientTransport("anyone", null, mServerAddress);
@@ -213,7 +214,7 @@ public final class TransportProviderTest {
         .getClientTransport(ExactlyMatchAuthenticationProvider.USERNAME,
             ExactlyMatchAuthenticationProvider.PASSWORD, mServerAddress);
     client.open();
-    Assert.assertTrue(client.isOpen());
+    assertTrue(client.isOpen());
 
     // clean up
     client.close();
@@ -257,7 +258,7 @@ public final class TransportProviderTest {
     mTransportProvider = TransportProvider.Factory.create();
 
     // check case that user is null
-    mThrown.expect(SaslException.class);
+    mThrown.expect(UnauthenticatedException.class);
     mThrown.expectMessage("PLAIN: authorization ID and password must be specified");
     ((PlainSaslTransportProvider) mTransportProvider)
         .getClientTransport(null, ExactlyMatchAuthenticationProvider.PASSWORD, mServerAddress);
@@ -272,7 +273,7 @@ public final class TransportProviderTest {
     mTransportProvider = TransportProvider.Factory.create();
 
     // check case that password is null
-    mThrown.expect(SaslException.class);
+    mThrown.expect(UnauthenticatedException.class);
     mThrown.expectMessage("PLAIN: authorization ID and password must be specified");
     ((PlainSaslTransportProvider) mTransportProvider)
         .getClientTransport(ExactlyMatchAuthenticationProvider.USERNAME, null, mServerAddress);
@@ -346,7 +347,7 @@ public final class TransportProviderTest {
 
   private void startServerThread() throws Exception {
     // create args and use them to build a Thrift TServer
-    TTransportFactory tTransportFactory = mTransportProvider.getServerTransportFactory();
+    TTransportFactory tTransportFactory = mTransportProvider.getServerTransportFactory("test");
 
     mServer = new TThreadPoolServer(
         new TThreadPoolServer.Args(mServerTSocket).maxWorkerThreads(2).minWorkerThreads(1)

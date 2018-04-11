@@ -11,7 +11,6 @@
 
 package alluxio.heartbeat;
 
-import com.google.common.base.Throwables;
 import org.junit.rules.TestRule;
 import org.junit.runner.Description;
 import org.junit.runners.model.Statement;
@@ -46,6 +45,9 @@ public final class ManuallyScheduleHeartbeat implements TestRule {
     this(Arrays.asList(threads));
   }
 
+  /**
+   * Stores executor threads and corresponding timer class.
+   */
   public static class Resource implements AutoCloseable {
     private final List<String> mThreads;
     private final Map<String, Class<? extends HeartbeatTimer>> mPrevious;
@@ -59,7 +61,7 @@ public final class ManuallyScheduleHeartbeat implements TestRule {
           Whitebox.invokeMethod(HeartbeatContext.class, "setTimerClass", threadName,
               HeartbeatContext.SCHEDULED_TIMER_CLASS);
         } catch (Exception e) {
-          throw Throwables.propagate(e);
+          throw new RuntimeException(e);
         }
       }
     }

@@ -16,7 +16,7 @@ import alluxio.Configuration;
 import alluxio.Constants;
 import alluxio.PropertyKey;
 import alluxio.client.file.FileSystem;
-import alluxio.util.UnderFileSystemUtils;
+import alluxio.util.io.FileUtils;
 import alluxio.util.network.NetworkAddressUtils;
 import alluxio.util.network.NetworkAddressUtils.ServiceType;
 
@@ -26,6 +26,8 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
+import java.nio.file.Files;
+import java.nio.file.Paths;
 
 import javax.annotation.concurrent.NotThreadSafe;
 
@@ -37,14 +39,11 @@ import javax.annotation.concurrent.NotThreadSafe;
  */
 @NotThreadSafe
 public final class LocalAlluxioMaster {
-  private static final Logger LOG = LoggerFactory.getLogger(Constants.LOGGER_TYPE);
+  private static final Logger LOG = LoggerFactory.getLogger(LocalAlluxioMaster.class);
 
   private final String mHostname;
 
   private final String mJournalFolder;
-
-  private final AlluxioMasterService mAlluxioMaster;
-  private final Thread mMasterThread;
 
   private final Supplier<String> mClientSupplier = new Supplier<String>() {
     @Override
@@ -54,41 +53,27 @@ public final class LocalAlluxioMaster {
   };
   private final ClientPool mClientPool = new ClientPool(mClientSupplier);
 
+  private MasterProcess mMasterProcess;
+  private Thread mMasterThread;
+
+  private AlluxioSecondaryMaster mSecondaryMaster;
+  private Thread mSecondaryMasterThread;
+
   private LocalAlluxioMaster() throws IOException {
     mHostname = NetworkAddressUtils.getConnectHost(ServiceType.MASTER_RPC);
     mJournalFolder = Configuration.get(PropertyKey.MASTER_JOURNAL_FOLDER);
-    mAlluxioMaster = AlluxioMasterService.Factory.create();
-
-    Runnable runMaster = new Runnable() {
-      @Override
-      public void run() {
-        try {
-          mAlluxioMaster.start();
-        } catch (Exception e) {
-          // Log the exception as the RuntimeException will be caught and handled silently by JUnit
-          LOG.error("Start master error", e);
-          throw new RuntimeException(e + " \n Start Master Error \n" + e.getMessage(), e);
-        }
-      }
-    };
-
-    mMasterThread = new Thread(runMaster);
   }
 
   /**
    * Creates a new local Alluxio master with an isolated work directory and port.
    *
-   * @throws IOException when unable to do file operation or listen on port
    * @return an instance of Alluxio master
    */
   public static LocalAlluxioMaster create() throws IOException {
     String workDirectory = uniquePath();
-    UnderFileSystemUtils.deleteDirIfExists(workDirectory);
-    UnderFileSystemUtils.mkdirIfNotExists(workDirectory);
-
+    FileUtils.deletePathRecursively(workDirectory);
     Configuration.set(PropertyKey.WORK_DIR, workDirectory);
-
-    return new LocalAlluxioMaster();
+    return create(workDirectory);
   }
 
   /**
@@ -96,11 +81,11 @@ public final class LocalAlluxioMaster {
    *
    * @param workDirectory Alluxio work directory, this method will create it if it doesn't exist yet
    * @return the created Alluxio master
-   * @throws IOException when unable to do file operation or listen on port
    */
   public static LocalAlluxioMaster create(final String workDirectory) throws IOException {
-    UnderFileSystemUtils.mkdirIfNotExists(workDirectory);
-
+    if (!Files.isDirectory(Paths.get(workDirectory))) {
+      Files.createDirectory(Paths.get(workDirectory));
+    }
     return new LocalAlluxioMaster();
   }
 
@@ -108,36 +93,85 @@ public final class LocalAlluxioMaster {
    * Starts the master.
    */
   public void start() {
+    mMasterProcess = MasterProcess.Factory.create();
+    Runnable runMaster = new Runnable() {
+      @Override
+      public void run() {
+        try {
+          LOG.info("Starting Alluxio master {}.", mMasterProcess);
+          mMasterProcess.start();
+        } catch (InterruptedException e) {
+          // this is expected
+        } catch (Exception e) {
+          // Log the exception as the RuntimeException will be caught and handled silently by JUnit
+          LOG.error("Start master error", e);
+          throw new RuntimeException(e + " \n Start Master Error \n" + e.getMessage(), e);
+        }
+      }
+    };
+    mMasterThread = new Thread(runMaster);
+    mMasterThread.setName("MasterThread-" + System.identityHashCode(mMasterThread));
     mMasterThread.start();
+    mMasterProcess.waitForReady();
+    mSecondaryMaster = new AlluxioSecondaryMaster();
+    Runnable runSecondaryMaster = new Runnable() {
+      @Override
+      public void run() {
+        try {
+          LOG.info("Starting secondary master {}.", mSecondaryMaster);
+          mSecondaryMaster.start();
+        } catch (InterruptedException e) {
+          // this is expected
+        } catch (Exception e) {
+          // Log the exception as the RuntimeException will be caught and handled silently by JUnit
+          LOG.error("Start secondary master error", e);
+          throw new RuntimeException(e + " \n Start Secondary Master Error \n" + e.getMessage(), e);
+        }
+      }
+    };
+    mSecondaryMasterThread = new Thread(runSecondaryMaster);
+    mSecondaryMasterThread
+        .setName("SecondaryMasterThread-" + System.identityHashCode(mSecondaryMasterThread));
+    mSecondaryMasterThread.start();
+    mSecondaryMaster.waitForReady();
   }
 
   /**
    * @return true if the master is serving, false otherwise
    */
   public boolean isServing() {
-    return mAlluxioMaster.isServing();
+    return mMasterProcess.isServing();
   }
 
   /**
-   * Stops the master and cleans up client connections.
-   *
-   * @throws Exception when the operation fails
+   * Stops the master processes and cleans up client connections.
    */
   public void stop() throws Exception {
+    if (mSecondaryMasterThread != null) {
+      mSecondaryMaster.stop();
+      while (mSecondaryMasterThread.isAlive()) {
+        LOG.info("Stopping thread {}.", mSecondaryMasterThread.getName());
+        mSecondaryMasterThread.interrupt();
+        mSecondaryMasterThread.join(1000);
+      }
+      mSecondaryMasterThread = null;
+    }
+    if (mMasterThread != null) {
+      mMasterProcess.stop();
+      while (mMasterThread.isAlive()) {
+        LOG.info("Stopping thread {}.", mMasterThread.getName());
+        mMasterThread.interrupt();
+        mMasterThread.join(1000);
+      }
+      mMasterThread = null;
+    }
     clearClients();
-
-    mAlluxioMaster.stop();
-    mMasterThread.interrupt();
-
     System.clearProperty("alluxio.web.resources");
     System.clearProperty("alluxio.master.min.worker.threads");
-
   }
 
   /**
    * Clears all the clients.
-   *
-   * @throws IOException if the client pool cannot be closed
    */
   public void clearClients() throws IOException {
     mClientPool.close();
@@ -147,14 +181,14 @@ public final class LocalAlluxioMaster {
    * @return the externally resolvable address of the master
    */
   public InetSocketAddress getAddress() {
-    return mAlluxioMaster.getRpcAddress();
+    return mMasterProcess.getRpcAddress();
   }
 
   /**
-   * @return the internal {@link AlluxioMasterService}
+   * @return the internal {@link MasterProcess}
    */
-  public AlluxioMasterService getInternalMaster() {
-    return mAlluxioMaster;
+  public MasterProcess getMasterProcess() {
+    return mMasterProcess;
   }
 
   /**
@@ -163,7 +197,7 @@ public final class LocalAlluxioMaster {
    * @return the RPC local port
    */
   public int getRpcLocalPort() {
-    return mAlluxioMaster.getRpcAddress().getPort();
+    return mMasterProcess.getRpcAddress().getPort();
   }
 
   /**
@@ -175,7 +209,6 @@ public final class LocalAlluxioMaster {
 
   /**
    * @return the client from the pool
-   * @throws IOException if the client cannot be retrieved
    */
   public FileSystem getClient() throws IOException {
     return mClientPool.getClient();

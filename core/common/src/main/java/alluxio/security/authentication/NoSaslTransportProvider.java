@@ -39,16 +39,15 @@ public final class NoSaslTransportProvider implements TransportProvider {
    * Constructor for transport provider when authentication type is {@link AuthType#NOSASL}.
    */
   public NoSaslTransportProvider() {
-    mSocketTimeoutMs = Configuration.getInt(PropertyKey.SECURITY_AUTHENTICATION_SOCKET_TIMEOUT_MS);
+    mSocketTimeoutMs =
+        (int) Configuration.getMs(PropertyKey.SECURITY_AUTHENTICATION_SOCKET_TIMEOUT_MS);
     mThriftFrameSizeMax =
         (int) Configuration.getBytes(PropertyKey.NETWORK_THRIFT_FRAME_SIZE_BYTES_MAX);
   }
 
   @Override
   public TTransport getClientTransport(InetSocketAddress serverAddress) {
-    TTransport tTransport =
-        TransportProviderUtils.createThriftSocket(serverAddress, mSocketTimeoutMs);
-    return new TFramedTransport(tTransport, mThriftFrameSizeMax);
+    return getClientTransport(null, serverAddress);
   }
 
   @Override
@@ -59,12 +58,13 @@ public final class NoSaslTransportProvider implements TransportProvider {
   }
 
   @Override
-  public TTransportFactory getServerTransportFactory() throws SaslException {
+  public TTransportFactory getServerTransportFactory(String serverName) throws SaslException {
     return new TFramedTransport.Factory(mThriftFrameSizeMax);
   }
 
   @Override
-  public TTransportFactory getServerTransportFactory(Runnable runnable) throws SaslException {
+  public TTransportFactory getServerTransportFactory(Runnable runnable, String serverName)
+      throws SaslException {
     return new TFramedTransport.Factory(mThriftFrameSizeMax);
   }
 }

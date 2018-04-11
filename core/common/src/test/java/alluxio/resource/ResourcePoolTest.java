@@ -11,18 +11,20 @@
 
 package alluxio.resource;
 
-import org.junit.Assert;
+import static org.junit.Assert.assertEquals;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
+
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.ExpectedException;
-import org.mockito.Mockito;
 
 import java.util.concurrent.ConcurrentLinkedQueue;
 
 /**
  * Unit test for {@code ResourcePool} class.
  */
-public class ResourcePoolTest {
+public final class ResourcePoolTest {
 
   /**
    * The exception expected to be thrown.
@@ -30,13 +32,27 @@ public class ResourcePoolTest {
   @Rule
   public ExpectedException mThrown = ExpectedException.none();
 
+  /**
+   * Constructor for {@code ResourcePool} class.
+   */
   class TestResourcePool extends ResourcePool<Integer> {
     int mPort = 0;
 
+    /**
+     * Creates a {@code ResourcePool} instance with a specified capacity.
+     *
+     * @param maxCapacity the maximum of resources in this pool
+     */
     public TestResourcePool(int maxCapacity) {
       super(maxCapacity);
     }
 
+    /**
+     * Creates a {@code ResourcePool} instance with a specified capacity and blocking queue.
+     *
+     * @param maxCapacity the maximum of resources in this pool
+     * @param resources blocking queue to use
+     */
     public TestResourcePool(int maxCapacity, ConcurrentLinkedQueue<Integer> resources) {
       super(maxCapacity, resources);
     }
@@ -62,7 +78,7 @@ public class ResourcePoolTest {
     int resource1 = testPool.acquire();
     testPool.release(resource1);
     int resource2 = testPool.acquire();
-    Assert.assertEquals(resource1, resource2);
+    assertEquals(resource1, resource2);
   }
 
   /**
@@ -73,10 +89,10 @@ public class ResourcePoolTest {
     mThrown.expect(RuntimeException.class);
     final int POOL_SIZE = 2;
     @SuppressWarnings("unchecked")
-    ConcurrentLinkedQueue<Integer> queue = Mockito.mock(ConcurrentLinkedQueue.class);
+    ConcurrentLinkedQueue<Integer> queue = mock(ConcurrentLinkedQueue.class);
     TestResourcePool testPool = new TestResourcePool(POOL_SIZE, queue);
-    Mockito.when(queue.isEmpty()).thenReturn(true);
-    Mockito.when(queue.poll()).thenThrow(new InterruptedException());
+    when(queue.isEmpty()).thenReturn(true);
+    when(queue.poll()).thenThrow(new InterruptedException());
     for (int i = 0; i < POOL_SIZE + 1; i++) {
       testPool.acquire();
     }

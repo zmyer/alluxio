@@ -11,7 +11,7 @@
 
 package alluxio.underfs.oss;
 
-import alluxio.Constants;
+import alluxio.util.CommonUtils;
 import alluxio.util.io.PathUtils;
 
 import com.aliyun.oss.OSSClient;
@@ -43,7 +43,7 @@ import javax.annotation.concurrent.NotThreadSafe;
  */
 @NotThreadSafe
 public final class OSSOutputStream extends OutputStream {
-  private static final Logger LOG = LoggerFactory.getLogger(Constants.LOGGER_TYPE);
+  private static final Logger LOG = LoggerFactory.getLogger(OSSOutputStream.class);
 
   /** Bucket name of the Alluxio OSS bucket. */
   private final String mBucketName;
@@ -68,7 +68,6 @@ public final class OSSOutputStream extends OutputStream {
    * @param bucketName the name of the bucket
    * @param key the key of the file
    * @param client the client for OSS
-   * @throws IOException if an I/O error occurs
    */
   public OSSOutputStream(String bucketName, String key, OSSClient client) throws IOException {
     Preconditions.checkArgument(bucketName != null && !bucketName.isEmpty(),
@@ -80,7 +79,7 @@ public final class OSSOutputStream extends OutputStream {
     mKey = key;
     mOssClient = client;
 
-    mFile = new File(PathUtils.concatPath("/tmp", UUID.randomUUID()));
+    mFile = new File(PathUtils.concatPath(CommonUtils.getTmpDir(), UUID.randomUUID()));
 
     try {
       mHash = MessageDigest.getInstance("MD5");
@@ -98,7 +97,6 @@ public final class OSSOutputStream extends OutputStream {
    * file.
    *
    * @param b the bytes to write
-   * @throws IOException if an I/O error occurs
    */
   @Override
   public void write(int b) throws IOException {
@@ -110,7 +108,6 @@ public final class OSSOutputStream extends OutputStream {
    * local file.
    *
    * @param b the byte array
-   * @throws IOException if an I/O error occurs
    */
   @Override
   public void write(byte[] b) throws IOException {
@@ -124,7 +121,6 @@ public final class OSSOutputStream extends OutputStream {
    * @param b the byte array
    * @param off the start offset in the data
    * @param len the number of bytes to write
-   * @throws IOException if an I/O error occurs
    */
   @Override
   public void write(byte[] b, int off, int len) throws IOException {
@@ -134,8 +130,6 @@ public final class OSSOutputStream extends OutputStream {
   /**
    * Flushes this output stream and forces any buffered output bytes to be written out. Before
    * close, the data are flushed to local file.
-   *
-   * @throws IOException if an I/O error occurs
    */
   @Override
   public void flush() throws IOException {
@@ -145,8 +139,6 @@ public final class OSSOutputStream extends OutputStream {
   /**
    * Closes this output stream. When an output stream is closed, the local temporary file is
    * uploaded to OSS Service. Once the file is uploaded, the temporary file is deleted.
-   *
-   * @throws IOException if an I/O error occurs
    */
   @Override
   public void close() throws IOException {

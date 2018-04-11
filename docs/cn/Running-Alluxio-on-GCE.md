@@ -6,10 +6,13 @@ group: Deploying Alluxio
 priority: 4
 ---
 
+* 内容列表
+{:toc}
+
 使用Alluxio自带的
 [Vagrant scripts](https://github.com/alluxio/alluxio/tree/master/deploy/vagrant)脚本可以将Alluxio部署在Google计算引擎（GCE）上。该脚本允许你创建，配置以及撤销集群。
 
-# 前期准备
+## 前期准备
 
 **安装Vagrant和Google插件**
 
@@ -21,9 +24,7 @@ priority: 4
 
 **安装 Alluxio**
 
-下载Alluxio到本地，并解压:
-
-{% include Common-Commands/download-alluxio.md %}
+下载 [Alluxio](https://alluxio.org/download)到你本地的机器上并解压(unzip)。
 
 **安装python依赖库**
 
@@ -37,7 +38,7 @@ priority: 4
 
 {% include Running-Alluxio-on-GCE/install-pip.md %}
 
-# 启动集群
+## 启动集群
 
 要在GCE上运行Alluxio集群, 首先在 [Google Cloud](cloud.google.com) 上有一个计费账号，项目，服务账户和JSON服务账号的密钥。
 
@@ -69,7 +70,7 @@ priority: 4
 
 集群中的每个节点运行一个Alluxio worker, `AlluxioMaster` 节点上运行Alluxio master。
 
-# 访问集群
+## 访问集群
 
 **通过Web UI访问**
 
@@ -80,14 +81,14 @@ priority: 4
 Alluxio Web UI的默认端口为 **19999**.
 
 在访问Web UI之前, 需要配置防火墙以允许19999端口上的tcp传输。
-可以通过在 [Console](console.cloud.google.com) UI 上完成或者使用类似如下的gcloud命令，假设网络名是 'default'.
+可以通过在 [Console](https://console.cloud.google.com) UI 上完成或者使用类似如下的gcloud命令，假设网络名是 'default'.
 
 {% include Running-Alluxio-on-GCE/add-firewall-rule.md %}
 
 在浏览器中输入 `http://{MASTER_IP}:{PORT}` 地址访问Web UI。
 
 也可以通过
-[Google Cloud console](https://console.cloud.google.com)监视其状态。
+[Google Cloud console](console.cloud.google.com)监视其状态。
 
 这里是一些当你检查控制台时，可能会遇到的问题:
  - 当集群创建失败，请检查 status/logs实例日志。
@@ -119,7 +120,7 @@ File System` 你应该能看到测试过程中写入到Alluxio的文件。
 
 {% include Running-Alluxio-on-GCE/ssh-other-node.md %}
 
-# 撤销集群
+## 撤销集群
 
 在 `deploy/vagrant` 目录下运行：
 

@@ -16,13 +16,14 @@ import alluxio.Constants;
 import alluxio.exception.AlluxioException;
 import alluxio.thrift.AlluxioService;
 import alluxio.thrift.AlluxioTException;
+import alluxio.thrift.GetNextKeysTOptions;
+import alluxio.thrift.GetSizeTOptions;
+import alluxio.thrift.GetTOptions;
 import alluxio.thrift.KeyValueWorkerClientService;
 import alluxio.util.network.NetworkAddressUtils;
 import alluxio.wire.WorkerNetAddress;
 
 import org.apache.thrift.TException;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -38,8 +39,6 @@ import javax.annotation.concurrent.ThreadSafe;
  */
 @ThreadSafe
 public final class KeyValueWorkerClient extends AbstractClient {
-  private static final Logger LOG = LoggerFactory.getLogger(Constants.LOGGER_TYPE);
-
   private KeyValueWorkerClientService.Client mClient = null;
 
   /**
@@ -48,7 +47,7 @@ public final class KeyValueWorkerClient extends AbstractClient {
    * @param workerNetAddress location of the worker to connect to
    */
   public KeyValueWorkerClient(WorkerNetAddress workerNetAddress) {
-    super(null, NetworkAddressUtils.getRpcPortSocketAddress(workerNetAddress), "key-value-worker");
+    super(null, NetworkAddressUtils.getRpcPortSocketAddress(workerNetAddress));
   }
 
   @Override
@@ -77,15 +76,13 @@ public final class KeyValueWorkerClient extends AbstractClient {
    * @param blockId The id of the block
    * @param key the key to get the value for
    * @return ByteBuffer of value, or null if not found
-   * @throws IOException if an I/O error occurs
-   * @throws AlluxioException if an Alluxio error occurs
    */
   public synchronized ByteBuffer get(final long blockId, final ByteBuffer key)
       throws IOException, AlluxioException {
-    return retryRPC(new RpcCallableThrowsAlluxioTException<ByteBuffer>() {
+    return retryRPC(new RpcCallable<ByteBuffer>() {
       @Override
       public ByteBuffer call() throws AlluxioTException, TException {
-        return mClient.get(blockId, key);
+        return mClient.get(blockId, key, new GetTOptions()).bufferForData();
       }
     });
   }
@@ -100,15 +97,13 @@ public final class KeyValueWorkerClient extends AbstractClient {
    * @param key the current key
    * @param numKeys maximum number of next keys to fetch
    * @return the next batch of keys
-   * @throws IOException if an I/O error occurs
-   * @throws AlluxioException if an Alluxio error occurs
    */
   public synchronized List<ByteBuffer> getNextKeys(final long blockId, final ByteBuffer key,
       final int numKeys) throws IOException, AlluxioException {
-    return retryRPC(new RpcCallableThrowsAlluxioTException<List<ByteBuffer>>() {
+    return retryRPC(new RpcCallable<List<ByteBuffer>>() {
       @Override
       public List<ByteBuffer> call() throws AlluxioTException, TException {
-        return mClient.getNextKeys(blockId, key, numKeys);
+        return mClient.getNextKeys(blockId, key, numKeys, new GetNextKeysTOptions()).getKeys();
       }
     });
   }
@@ -116,14 +111,12 @@ public final class KeyValueWorkerClient extends AbstractClient {
   /**
    * @param blockId the id of the partition
    * @return the number of key-value pairs in the partition
-   * @throws IOException if a non-Alluxio related exception occurs
-   * @throws AlluxioException if an exception in Alluxio occurs
    */
   public synchronized int getSize(final long blockId) throws IOException, AlluxioException {
-    return retryRPC(new RpcCallableThrowsAlluxioTException<Integer>() {
+    return retryRPC(new RpcCallable<Integer>() {
       @Override
       public Integer call() throws AlluxioTException, TException {
-        return mClient.getSize(blockId);
+        return mClient.getSize(blockId, new GetSizeTOptions()).getSize();
       }
     });
   }

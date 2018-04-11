@@ -83,7 +83,7 @@ public final class BlockLocation implements Serializable {
    * @return the block location
    */
   public BlockLocation setWorkerAddress(WorkerNetAddress workerAddress) {
-    Preconditions.checkNotNull(workerAddress);
+    Preconditions.checkNotNull(workerAddress, "workerAddress");
     mWorkerAddress = workerAddress;
     return this;
   }
@@ -93,7 +93,7 @@ public final class BlockLocation implements Serializable {
    * @return the block location
    */
   public BlockLocation setTierAlias(String tierAlias) {
-    Preconditions.checkNotNull(tierAlias);
+    Preconditions.checkNotNull(tierAlias, "tierAlias");
     mTierAlias = tierAlias;
     return this;
   }

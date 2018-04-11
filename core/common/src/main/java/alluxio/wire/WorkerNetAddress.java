@@ -11,16 +11,22 @@
 
 package alluxio.wire;
 
+import alluxio.Constants;
+import alluxio.annotation.PublicApi;
+import alluxio.wire.TieredIdentity.LocalityTier;
+
 import com.google.common.base.Objects;
 import com.google.common.base.Preconditions;
 
 import java.io.Serializable;
+import java.util.Arrays;
 
 import javax.annotation.concurrent.NotThreadSafe;
 
 /**
  * The network address of a worker.
  */
+@PublicApi
 @NotThreadSafe
 public final class WorkerNetAddress implements Serializable {
   private static final long serialVersionUID = 5822347646342091434L;
@@ -29,6 +35,8 @@ public final class WorkerNetAddress implements Serializable {
   private int mRpcPort;
   private int mDataPort;
   private int mWebPort;
+  private String mDomainSocketPath = "";
+  private TieredIdentity mTieredIdentity;
 
   /**
    * Creates a new instance of {@link WorkerNetAddress}.
@@ -45,6 +53,14 @@ public final class WorkerNetAddress implements Serializable {
     mRpcPort = workerNetAddress.getRpcPort();
     mDataPort = workerNetAddress.getDataPort();
     mWebPort = workerNetAddress.getWebPort();
+    mDomainSocketPath = workerNetAddress.getDomainSocketPath();
+    mTieredIdentity = TieredIdentity.fromThrift(workerNetAddress.getTieredIdentity());
+    if (mTieredIdentity == null) {
+      // This means the worker is pre-1.7.0. We handle this in post-1.7.0 clients by filling out
+      // the tiered identity using the hostname field.
+      mTieredIdentity =
+          new TieredIdentity(Arrays.asList(new LocalityTier(Constants.LOCALITY_NODE, mHost)));
+    }
   }
 
   /**
@@ -76,11 +92,28 @@ public final class WorkerNetAddress implements Serializable {
   }
 
   /**
+   * @return the domain socket path
+   */
+  public String getDomainSocketPath() {
+    return mDomainSocketPath;
+  }
+
+  /**
+   * @return the tiered identity
+   */
+  public TieredIdentity getTieredIdentity() {
+    if (mTieredIdentity != null) {
+      return mTieredIdentity;
+    }
+    return new TieredIdentity(Arrays.asList(new LocalityTier(Constants.LOCALITY_NODE, mHost)));
+  }
+
+  /**
    * @param host the host to use
    * @return the worker net address
    */
   public WorkerNetAddress setHost(String host) {
-    Preconditions.checkNotNull(host);
+    Preconditions.checkNotNull(host, "host");
     mHost = host;
     return this;
   }
@@ -113,10 +146,37 @@ public final class WorkerNetAddress implements Serializable {
   }
 
   /**
+   * @param domainSocketPath the domain socket path
+   * @return the worker net address
+   */
+  public WorkerNetAddress setDomainSocketPath(String domainSocketPath) {
+    mDomainSocketPath = domainSocketPath;
+    return this;
+  }
+
+  /**
+   * @param tieredIdentity the tiered identity
+   * @return the worker net address
+   */
+  public WorkerNetAddress setTieredIdentity(TieredIdentity tieredIdentity) {
+    mTieredIdentity = tieredIdentity;
+    return this;
+  }
+
+  /**
    * @return a net address of thrift construct
    */
   protected alluxio.thrift.WorkerNetAddress toThrift() {
-    return new alluxio.thrift.WorkerNetAddress(mHost, mRpcPort, mDataPort, mWebPort);
+    alluxio.thrift.WorkerNetAddress address = new alluxio.thrift.WorkerNetAddress();
+    address.setHost(mHost);
+    address.setRpcPort(mRpcPort);
+    address.setDataPort(mDataPort);
+    address.setWebPort(mWebPort);
+    address.setDomainSocketPath(mDomainSocketPath);
+    if (mTieredIdentity != null) {
+      address.setTieredIdentity(mTieredIdentity.toThrift());
+    }
+    return address;
   }
 
   @Override
@@ -128,18 +188,29 @@ public final class WorkerNetAddress implements Serializable {
       return false;
     }
     WorkerNetAddress that = (WorkerNetAddress) o;
-    return mHost.equals(that.mHost) && mRpcPort == that.mRpcPort && mDataPort == that.mDataPort
-        && mWebPort == that.mWebPort;
+    return mHost.equals(that.mHost)
+        && mRpcPort == that.mRpcPort
+        && mDataPort == that.mDataPort
+        && mWebPort == that.mWebPort
+        && mDomainSocketPath.equals(that.mDomainSocketPath)
+        && Objects.equal(mTieredIdentity, that.mTieredIdentity);
   }
 
   @Override
   public int hashCode() {
-    return Objects.hashCode(mHost, mDataPort, mRpcPort, mWebPort);
+    return Objects.hashCode(mHost, mDataPort, mRpcPort, mWebPort, mDomainSocketPath,
+        mTieredIdentity);
   }
 
   @Override
   public String toString() {
-    return Objects.toStringHelper(this).add("host", mHost).add("rpcPort", mRpcPort)
-        .add("dataPort", mDataPort).add("webPort", mWebPort).toString();
+    return Objects.toStringHelper(this)
+        .add("host", mHost)
+        .add("rpcPort", mRpcPort)
+        .add("dataPort", mDataPort)
+        .add("webPort", mWebPort)
+        .add("domainSocketPath", mDomainSocketPath)
+        .add("tieredIdentity", mTieredIdentity)
+        .toString();
   }
 }

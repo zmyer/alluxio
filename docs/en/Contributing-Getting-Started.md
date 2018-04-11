@@ -5,6 +5,9 @@ nickname: Contributor Getting Started
 group: Resources
 ---
 
+* Table of Contents
+{:toc}
+
 Welcome to the Alluxio community! We are excited for your contributions and engagement in the
 community! Here is a guide on how to get started with becoming a member in the Alluxio open source
 community.
@@ -17,6 +20,8 @@ support at the moment.
 ## Software and Account Preparation
 
 There is some software and account setup required before contributing to Alluxio.
+
+> Watch our "Alluxio new contributor" video in the [Video](#video) section below!
 
 ### Java 7 or 8
 
@@ -263,6 +268,10 @@ your pull request an **LGTM**. After at least 2 LGTM’s, a maintainer will merg
 into the Alluxio code base.
 
 Congratulations! You have successfully contributed to Alluxio! Thank you for joining the community!
+
+## Video
+
+<iframe width="560" height="315" src="https://www.youtube.com/embed/QsbM804rc6Y" frameborder="0" allowfullscreen></iframe>
 
 ## Moving to More Advanced Tasks
 

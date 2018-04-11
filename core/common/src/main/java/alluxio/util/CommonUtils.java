@@ -11,24 +11,48 @@
 
 package alluxio.util;
 
+import alluxio.Configuration;
 import alluxio.Constants;
+import alluxio.PropertyKey;
+import alluxio.exception.status.AlluxioStatusException;
+import alluxio.exception.status.Status;
+import alluxio.proto.dataserver.Protocol;
 import alluxio.security.group.CachedGroupMapping;
 import alluxio.security.group.GroupMappingService;
 import alluxio.util.ShellUtils.ExitCodeException;
+import alluxio.util.network.NetworkAddressUtils;
+import alluxio.wire.WorkerNetAddress;
 
 import com.google.common.base.Function;
+import com.google.common.base.Preconditions;
 import com.google.common.base.Splitter;
+import com.google.common.base.Throwables;
+import com.google.common.io.Closer;
+import io.netty.channel.Channel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.InvocationTargetException;
+import java.text.DateFormat;
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Date;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.NoSuchElementException;
 import java.util.Random;
 import java.util.StringTokenizer;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.function.Supplier;
 
 import javax.annotation.concurrent.ThreadSafe;
 
@@ -37,9 +61,13 @@ import javax.annotation.concurrent.ThreadSafe;
  */
 @ThreadSafe
 public final class CommonUtils {
-  private static final Logger LOG = LoggerFactory.getLogger(Constants.LOGGER_TYPE);
+  private static final Logger LOG = LoggerFactory.getLogger(CommonUtils.class);
+
   private static final String ALPHANUM =
       "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+  private static final String DATE_FORMAT_PATTERN =
+      Configuration.get(PropertyKey.USER_DATE_FORMAT_PATTERN);
+  private static final List<String> TMP_DIRS = Configuration.getList(PropertyKey.TMP_DIRS, ",");
   private static final Random RANDOM = new Random();
 
   /**
@@ -47,6 +75,18 @@ public final class CommonUtils {
    */
   public static long getCurrentMs() {
     return System.currentTimeMillis();
+  }
+
+  /**
+   * @return a path to a temporary directory based on the user configuration
+   */
+  public static String getTmpDir() {
+    Preconditions.checkState(!TMP_DIRS.isEmpty(), "No temporary directories configured");
+    if (TMP_DIRS.size() == 1) {
+      return TMP_DIRS.get(0);
+    }
+    // Use existing random instead of ThreadLocal because contention is not expected to be high.
+    return TMP_DIRS.get(RANDOM.nextInt(TMP_DIRS.size()));
   }
 
   /**
@@ -171,21 +211,22 @@ public final class CommonUtils {
    * @param ctorClassArgs parameters type list of the constructor to initiate, if null default
    *        constructor will be called
    * @param ctorArgs the arguments to pass the constructor
-   * @return new class object or null if not successful
-   * @throws InstantiationException if the instantiation fails
-   * @throws IllegalAccessException if the constructor cannot be accessed
-   * @throws NoSuchMethodException if the constructor does not exist
-   * @throws SecurityException if security violation has occurred
-   * @throws InvocationTargetException if the constructor invocation results in an exception
+   * @return new class object
+   * @throws RuntimeException if the class cannot be instantiated
    */
   public static <T> T createNewClassInstance(Class<T> cls, Class<?>[] ctorClassArgs,
-      Object[] ctorArgs) throws InstantiationException, IllegalAccessException,
-      NoSuchMethodException, SecurityException, InvocationTargetException {
-    if (ctorClassArgs == null) {
-      return cls.newInstance();
+      Object[] ctorArgs) {
+    try {
+      if (ctorClassArgs == null) {
+        return cls.newInstance();
+      }
+      Constructor<T> ctor = cls.getConstructor(ctorClassArgs);
+      return ctor.newInstance(ctorArgs);
+    } catch (InvocationTargetException e) {
+      throw new RuntimeException(e.getCause());
+    } catch (ReflectiveOperationException e) {
+      throw new RuntimeException(e);
     }
-    Constructor<T> ctor = cls.getConstructor(ctorClassArgs);
-    return ctor.newInstance(ctorArgs);
   }
 
   /**
@@ -194,7 +235,6 @@ public final class CommonUtils {
    *
    * @param user user name
    * @return the groups list that the {@code user} belongs to. The primary group is returned first
-   * @throws IOException if encounter any error when running the command
    */
   public static List<String> getUnixGroups(String user) throws IOException {
     String result;
@@ -202,7 +242,7 @@ public final class CommonUtils {
     try {
       result = ShellUtils.execCommand(ShellUtils.getGroupsForUserCommand(user));
     } catch (ExitCodeException e) {
-      // if we didn't get the group - just return empty list;
+      // if we didn't get the group - just return empty list
       LOG.warn("got exception trying to get groups for user " + user + ": " + e.getMessage());
       return groups;
     }
@@ -217,7 +257,17 @@ public final class CommonUtils {
   /**
    * Waits for a condition to be satisfied.
    *
-   * @param description a description of what causes condition to evaluation to true
+   * @param description a description of what causes condition to evaluate to true
+   * @param condition the condition to wait on
+   */
+  public static void waitFor(String description, Supplier<Boolean> condition) {
+    waitFor(description, input -> condition.get(), WaitForOptions.defaults());
+  }
+
+  /**
+   * Waits for a condition to be satisfied.
+   *
+   * @param description a description of what causes condition to evaluate to true
    * @param condition the condition to wait on
    */
   public static void waitFor(String description, Function<Void, Boolean> condition) {
@@ -227,7 +277,7 @@ public final class CommonUtils {
   /**
    * Waits for a condition to be satisfied.
    *
-   * @param description a description of what causes condition to evaluation to true
+   * @param description a description of what causes condition to evaluate to true
    * @param condition the condition to wait on
    * @param options the options to use
    */
@@ -235,7 +285,7 @@ public final class CommonUtils {
       WaitForOptions options) {
     long start = System.currentTimeMillis();
     int interval = options.getInterval();
-    int timeout = options.getTimeout();
+    int timeout = options.getTimeoutMs();
     while (!condition.apply(null)) {
       if (timeout != WaitForOptions.NEVER && System.currentTimeMillis() - start > timeout) {
         throw new RuntimeException("Timed out waiting for " + description);
@@ -258,7 +308,7 @@ public final class CommonUtils {
     T t;
     long start = System.currentTimeMillis();
     int interval = options.getInterval();
-    int timeout = options.getTimeout();
+    int timeout = options.getTimeoutMs();
     while ((t = operation.apply(null)) == null) {
       if (timeout != WaitForOptions.NEVER && System.currentTimeMillis() - start > timeout) {
         throw new RuntimeException("Timed out waiting for " + description);
@@ -273,7 +323,6 @@ public final class CommonUtils {
    *
    * @param userName Alluxio user name
    * @return primary group name
-   * @throws IOException if getting group failed
    */
   public static String getPrimaryGroupName(String userName) throws IOException {
     List<String> groups = getGroups(userName);
@@ -285,7 +334,6 @@ public final class CommonUtils {
    *
    * @param userName Alluxio user name
    * @return the group list of the user
-   * @throws IOException if getting group list failed
    */
   public static List<String> getGroups(String userName) throws IOException {
     GroupMappingService groupMappingService = GroupMappingService.Factory.get();
@@ -324,6 +372,21 @@ public final class CommonUtils {
   }
 
   /**
+   * Strips the leading and trailing quotes from the given string.
+   * E.g. return 'alluxio' for input '"alluxio"'.
+   *
+   * @param str The string to strip
+   * @return The string without the leading and trailing quotes
+   */
+  public static String stripLeadingAndTrailingQuotes(String str) {
+    int length = str.length();
+    if (length > 1 && str.startsWith("\"") && str.endsWith("\"")) {
+      str = str.substring(1, length - 1);
+    }
+    return str;
+  }
+
+  /**
    * Gets the value with a given key from a static key/value mapping in string format. E.g. with
    * mapping "id1=user1;id2=user2", it returns "user1" with key "id1". It returns null if the given
    * key does not exist in the mapping.
@@ -352,6 +415,259 @@ public final class CommonUtils {
       e = e.getCause();
     }
     return e;
+  }
+
+  /**
+   * Casts a {@link Throwable} to an {@link IOException}.
+   *
+   * @param e the throwable
+   * @return the IO exception
+   */
+  public static IOException castToIOException(Throwable e) {
+    if (e instanceof IOException) {
+      return (IOException) e;
+    } else {
+      return new IOException(e);
+    }
+  }
+
+  /**
+   * Returns an iterator that iterates on a single element.
+   *
+   * @param element the element
+   * @param <T> the type of the element
+   * @return the iterator
+   */
+  public static <T> Iterator<T> singleElementIterator(final T element) {
+    return new Iterator<T>() {
+      private boolean mHasNext = true;
+
+      @Override
+      public boolean hasNext() {
+        return mHasNext;
+      }
+
+      @Override
+      public T next() {
+        if (!hasNext()) {
+          throw new NoSuchElementException();
+        }
+        mHasNext = false;
+        return element;
+      }
+
+      @Override
+      public void remove() {
+        throw new UnsupportedOperationException("remove is not supported.");
+      }
+    };
+  }
+
+  /**
+   * Executes the given callables, waiting for them to complete (or time out). If a callable throws
+   * an exception, that exception will be re-thrown from this method.
+   *
+   * @param callables the callables to execute
+   * @param timeout the maximum time to wait
+   * @param unit the time unit of the timeout argument
+   * @param <T> the return type of the callables
+   * @throws Exception if any of the callables throws an exception
+   */
+  public static <T> void invokeAll(List<Callable<T>> callables, long timeout, TimeUnit unit)
+      throws TimeoutException, Exception {
+    ExecutorService service = Executors.newCachedThreadPool();
+    try {
+      List<Future<T>> results = service.invokeAll(callables, timeout, unit);
+      service.shutdownNow();
+      propagateExceptions(results);
+      for (Future<T> result : results) {
+        if (result.isCancelled()) {
+          throw new TimeoutException("Timed out invoking task");
+        }
+      }
+      // All tasks are guaranteed to have finished at this point. If they were still running, their
+      // futures would have been canceled by invokeAll.
+      if (!service.awaitTermination(1, TimeUnit.SECONDS)) {
+        throw new IllegalStateException("Failed to shutdown service");
+      }
+    } catch (InterruptedException e) {
+      service.shutdownNow();
+      Thread.currentThread().interrupt();
+      throw new RuntimeException(e);
+    }
+  }
+
+  /**
+   * Checks whether any of the futures have completed with an exception, propagating the exception
+   * if any is found.
+   *
+   * @param futures the futures to check
+   * @throws Exception if one of the futures completed with an exception
+   */
+  private static <T> void propagateExceptions(List<Future<T>> futures) throws Exception {
+    for (Future<?> future : futures) {
+      try {
+        if (future.isDone() && !future.isCancelled()) {
+          future.get();
+        }
+      } catch (ExecutionException e) {
+        Throwable cause = e.getCause();
+        Throwables.propagateIfPossible(cause);
+        if (cause instanceof Exception) {
+          throw (Exception) cause;
+        }
+        throw new RuntimeException(cause);
+      }
+    }
+  }
+
+  /**
+   * Closes the Closer and re-throws the Throwable. Any exceptions thrown while closing the Closer
+   * will be added as suppressed exceptions to the Throwable. This method always throws the given
+   * Throwable, wrapping it in a RuntimeException if it's a non-IOException checked exception.
+   *
+   * Note: This method will wrap non-IOExceptions in RuntimeException. Do not use this method in
+   * methods which throw non-IOExceptions.
+   *
+   * <pre>
+   * Closer closer = new Closer();
+   * try {
+   *   Closeable c = closer.register(new Closeable());
+   * } catch (Throwable t) {
+   *   throw closeAndRethrow(closer, t);
+   * }
+   * </pre>
+   *
+   * @param closer the Closer to close
+   * @param t the Throwable to re-throw
+   * @return this method never returns
+   */
+  public static RuntimeException closeAndRethrow(Closer closer, Throwable t) throws IOException {
+    try {
+      throw closer.rethrow(t);
+    } finally {
+      closer.close();
+    }
+  }
+
+  /** Alluxio process types. */
+  public enum ProcessType {
+    CLIENT,
+    MASTER,
+    PROXY,
+    WORKER;
+  }
+
+  /**
+   * Represents the type of Alluxio process running in this JVM.
+   *
+   * NOTE: This will only be set by main methods of Alluxio processes. It will not be set properly
+   * for tests. Avoid using this field if at all possible.
+   */
+  public static final java.util.concurrent.atomic.AtomicReference<ProcessType> PROCESS_TYPE =
+      new java.util.concurrent.atomic.AtomicReference<>(ProcessType.CLIENT);
+
+  /**
+   * Unwraps a {@link alluxio.proto.dataserver.Protocol.Response}.
+   *
+   * @param response the response
+   */
+  public static void unwrapResponse(Protocol.Response response) throws AlluxioStatusException {
+    Status status = Status.fromProto(response.getStatus());
+    if (status != Status.OK) {
+      throw AlluxioStatusException.from(status, response.getMessage());
+    }
+  }
+
+  /**
+   * Unwraps a {@link alluxio.proto.dataserver.Protocol.Response} associated with a channel.
+   *
+   * @param response the response
+   * @param channel the channel that receives this response
+   */
+  public static void unwrapResponseFrom(Protocol.Response response, Channel channel)
+      throws AlluxioStatusException {
+    Status status = Status.fromProto(response.getStatus());
+    if (status != Status.OK) {
+      throw AlluxioStatusException.from(status, String
+          .format("Channel to %s: %s", channel.remoteAddress(), response.getMessage()));
+    }
+  }
+
+  /**
+   * @param address the Alluxio worker network address
+   * @return true if the worker is local
+   */
+  public static boolean isLocalHost(WorkerNetAddress address) {
+    return address.getHost().equals(NetworkAddressUtils.getClientHostName());
+  }
+
+  /**
+   * Closes the netty channel from outside the netty I/O thread.
+   * NOTE: Be careful when holding any lock that can be acquired in the netty I/O thread when
+   * calling this function to avoid having deadlocks.
+   *
+   * @param channel the netty channel
+   */
+  public static void closeChannel(final Channel channel) {
+    if (channel.isOpen())  {
+      try {
+        channel.eventLoop().submit(new Runnable() {
+          @Override
+          public void run() {
+            channel.close();
+          }
+        }).sync();
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+        throw new RuntimeException(e);
+      }
+    }
+  }
+
+  /**
+   * Closes the netty channel synchronously. Usually do not do this since this can take long time
+   * if the server is not responsive.
+   *
+   * @param channel the netty channel
+   */
+  public static void closeChannelSync(Channel channel) {
+    try {
+      channel.close().sync();
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw new RuntimeException(e);
+    }
+  }
+
+  /**
+   * Converts a millisecond number to a formatted date String.
+   *
+   * @param millis a long millisecond number
+   * @return formatted date String
+   */
+  public static String convertMsToDate(long millis) {
+    DateFormat dateFormat = new SimpleDateFormat(DATE_FORMAT_PATTERN);
+    return dateFormat.format(new Date(millis));
+  }
+
+  /**
+   * Converts milliseconds to clock time.
+   *
+   * @param millis milliseconds
+   * @return input encoded as clock time
+   */
+  public static String convertMsToClockTime(long millis) {
+    Preconditions.checkArgument(millis >= 0,
+        "Negative values %s are not supported to convert to clock time.", millis);
+
+    long days = millis / Constants.DAY_MS;
+    long hours = (millis % Constants.DAY_MS) / Constants.HOUR_MS;
+    long mins = (millis % Constants.HOUR_MS) / Constants.MINUTE_MS;
+    long secs = (millis % Constants.MINUTE_MS) / Constants.SECOND_MS;
+
+    return String.format("%d day(s), %d hour(s), %d minute(s), and %d second(s)", days, hours,
+        mins, secs);
   }
 
   private CommonUtils() {} // prevent instantiation

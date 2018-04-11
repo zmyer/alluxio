@@ -13,6 +13,7 @@ package alluxio;
 
 import alluxio.annotation.PublicApi;
 import alluxio.util.URIUtils;
+import alluxio.util.io.PathUtils;
 
 import org.apache.commons.lang.StringUtils;
 
@@ -20,6 +21,7 @@ import java.io.Serializable;
 import java.util.Arrays;
 import java.util.Map;
 
+import javax.annotation.Nullable;
 import javax.annotation.concurrent.ThreadSafe;
 
 /**
@@ -33,7 +35,9 @@ import javax.annotation.concurrent.ThreadSafe;
  *     * E:\path\to\skip\..\file
  *   * URI with multiple scheme components
  *     * scheme://host:123/path
+ *     * scheme:part2//host:123/path
  *     * scheme:part2://host:123/path
+ *     * scheme:part2:part3//host:123/path
  *     * scheme:part2:part3://host:123/path
  *
  * Does not support fragment in the URI.
@@ -128,6 +132,7 @@ public final class AlluxioURI implements Comparable<AlluxioURI>, Serializable {
    *
    * @return the authority, null if it does not have one
    */
+  @Nullable
   public String getAuthority() {
     return mUri.getAuthority();
   }
@@ -137,6 +142,7 @@ public final class AlluxioURI implements Comparable<AlluxioURI>, Serializable {
    *
    * <pre>
    * /                                  = 0
+   * .                                  = 0
    * /a                                 = 1
    * /a/b/c.txt                         = 3
    * /a/b/                              = 3
@@ -153,7 +159,7 @@ public final class AlluxioURI implements Comparable<AlluxioURI>, Serializable {
    */
   public int getDepth() {
     String path = mUri.getPath();
-    if (path.isEmpty()) {
+    if (path.isEmpty() || CUR_DIR.equals(path)) {
       return 0;
     }
     if (hasWindowsDrive(path, true)) {
@@ -185,6 +191,7 @@ public final class AlluxioURI implements Comparable<AlluxioURI>, Serializable {
    * @param n identifies the number of path components to get
    * @return the first n path components, null if the path has less than n components
    */
+  @Nullable
   public String getLeadingPath(int n) {
     String path = mUri.getPath();
     if (n == 0 && path.indexOf(AlluxioURI.SEPARATOR) == 0) { // the special case
@@ -215,6 +222,7 @@ public final class AlluxioURI implements Comparable<AlluxioURI>, Serializable {
    *
    * @return the host, null if it does not have one
    */
+  @Nullable
   public String getHost() {
     return mUri.getHost();
   }
@@ -235,6 +243,7 @@ public final class AlluxioURI implements Comparable<AlluxioURI>, Serializable {
    *
    * @return the parent of this {@link AlluxioURI} or null if at root
    */
+  @Nullable
   public AlluxioURI getParent() {
     String path = mUri.getPath();
     int lastSlash = path.lastIndexOf('/');
@@ -285,8 +294,20 @@ public final class AlluxioURI implements Comparable<AlluxioURI>, Serializable {
    *
    * @return the scheme, null if there is no scheme
    */
+  @Nullable
   public String getScheme() {
     return mUri.getScheme();
+  }
+
+  /**
+   * @return the normalized path stripped of the folder path component
+   */
+  public String getRootPath() {
+    String rootPath = this.toString();
+    if (this.getPath() != null) {
+      rootPath = rootPath.substring(0, rootPath.lastIndexOf(this.getPath()));
+    }
+    return PathUtils.normalizePath(rootPath, AlluxioURI.SEPARATOR);
   }
 
   /**

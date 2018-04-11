@@ -11,7 +11,7 @@
 
 package alluxio.wire;
 
-import org.codehaus.jackson.map.ObjectMapper;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.Assert;
 import org.junit.Test;
 
@@ -19,12 +19,10 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
 
-public class BlockInfoTest {
+public final class BlockInfoTest {
 
   /**
    * Test to convert between a BlockInfo type and a json type.
-   *
-   * @throws Exception if an error occurs during convert between BlockInfo type and json type
    */
   @Test
   public void json() throws Exception {

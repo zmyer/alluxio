@@ -13,13 +13,13 @@ package alluxio.wire;
 
 import alluxio.util.CommonUtils;
 
-import org.codehaus.jackson.map.ObjectMapper;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.Assert;
 import org.junit.Test;
 
 import java.util.Random;
 
-public class BlockLocationTest {
+public final class BlockLocationTest {
 
   @Test
   public void json() throws Exception {

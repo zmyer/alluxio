@@ -11,7 +11,6 @@
 
 package alluxio.util;
 
-import alluxio.Constants;
 import alluxio.master.block.BlockId;
 
 import org.slf4j.Logger;
@@ -27,12 +26,15 @@ import javax.annotation.concurrent.ThreadSafe;
  */
 @ThreadSafe
 public final class IdUtils {
-  private IdUtils() {} // prevent instantiation
+  private static final Logger LOG = LoggerFactory.getLogger(IdUtils.class);
 
-  private static final Logger LOG = LoggerFactory.getLogger(Constants.LOGGER_TYPE);
   public static final long INVALID_FILE_ID = -1;
   public static final long INVALID_WORKER_ID = -1;
+  public static final long INVALID_MOUNT_ID = -1;
+  public static final long ROOT_MOUNT_ID = 1;
   private static SecureRandom sRandom = new SecureRandom();
+
+  private IdUtils() {} // prevent instantiation
 
   /**
    * Creates an id for a file based on the given id of the container.
@@ -74,5 +76,19 @@ public final class IdUtils {
    */
   public static synchronized long getRandomNonNegativeLong() {
     return Math.abs(sRandom.nextLong());
+  }
+
+  /**
+   * @return a session ID
+   */
+  public static long createSessionId() {
+    return getRandomNonNegativeLong();
+  }
+
+  /**
+   * @return a random long which is guaranteed to be non negative (zero is allowed)
+   */
+  public static long createMountId() {
+    return getRandomNonNegativeLong();
   }
 }

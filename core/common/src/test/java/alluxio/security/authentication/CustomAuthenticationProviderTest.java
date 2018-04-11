@@ -21,7 +21,7 @@ import javax.security.sasl.AuthenticationException;
 /**
  * Tests the {@link CustomAuthenticationProvider} class.
  */
-public class CustomAuthenticationProviderTest {
+public final class CustomAuthenticationProviderTest {
 
   /**
    * The exception expected to be thrown.
@@ -49,7 +49,8 @@ public class CustomAuthenticationProviderTest {
   public void classNotProvider() {
     String notProviderClass = CustomAuthenticationProviderTest.class.getName();
     mThrown.expect(RuntimeException.class);
-    mThrown.expectMessage(notProviderClass + " instantiate failed :");
+    mThrown.expectMessage("alluxio.security.authentication.CustomAuthenticationProviderTest "
+        + "cannot be cast to alluxio.security.authentication.AuthenticationProvider");
     new CustomAuthenticationProvider(notProviderClass);
   }
 

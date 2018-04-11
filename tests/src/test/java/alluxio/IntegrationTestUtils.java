@@ -11,9 +11,12 @@
 
 package alluxio;
 
+import alluxio.client.file.FileSystem;
 import alluxio.client.file.FileSystemMasterClient;
+import alluxio.client.file.options.GetStatusOptions;
 import alluxio.heartbeat.HeartbeatContext;
 import alluxio.heartbeat.HeartbeatScheduler;
+import alluxio.master.MasterClientConfig;
 import alluxio.util.CommonUtils;
 import alluxio.util.WaitForOptions;
 import alluxio.worker.block.BlockHeartbeatReporter;
@@ -23,6 +26,7 @@ import com.google.common.base.Function;
 import com.google.common.base.Throwables;
 import org.powermock.reflect.Whitebox;
 
+import java.io.IOException;
 import java.util.Arrays;
 import java.util.List;
 
@@ -38,7 +42,7 @@ public final class IntegrationTestUtils {
    * @param uri the file uri to wait to be persisted
    */
   public static void waitForPersist(LocalAlluxioClusterResource localAlluxioClusterResource,
-      AlluxioURI uri) {
+      AlluxioURI uri) throws IOException {
     waitForPersist(localAlluxioClusterResource, uri, 15 * Constants.SECOND_MS);
   }
 
@@ -51,20 +55,39 @@ public final class IntegrationTestUtils {
    */
   public static void waitForPersist(final LocalAlluxioClusterResource localAlluxioClusterResource,
       final AlluxioURI uri, int timeoutMs) {
-
-    try (FileSystemMasterClient client = new FileSystemMasterClient(null,
-        localAlluxioClusterResource.get().getMaster().getAddress())) {
+    try (FileSystemMasterClient client =
+        FileSystemMasterClient.Factory.create(MasterClientConfig.defaults())) {
       CommonUtils.waitFor(uri + " to be persisted", new Function<Void, Boolean>() {
         @Override
         public Boolean apply(Void input) {
           try {
-            return client.getStatus(uri).isPersisted();
+            return client.getStatus(uri, GetStatusOptions.defaults()).isPersisted();
           } catch (Exception e) {
             throw Throwables.propagate(e);
           }
         }
-      }, WaitForOptions.defaults().setTimeout(timeoutMs));
+      }, WaitForOptions.defaults().setTimeoutMs(timeoutMs));
+    } catch (IOException e) {
+      throw new RuntimeException(e);
     }
+  }
+
+  /**
+   * Blocks until the specified file is full cached in Alluxio or a timeout occurs.
+   *
+   * @param fileSystem the filesystem client
+   * @param uri the uri to wait to be persisted
+   * @param timeoutMs the number of milliseconds to wait before giving up and throwing an exception
+   */
+  public static void waitForFileCached(final FileSystem fileSystem, final AlluxioURI uri,
+      int timeoutMs) {
+    CommonUtils.waitFor(uri + " to be cached", (input) -> {
+      try {
+        return fileSystem.getStatus(uri).getInAlluxioPercentage() == 100;
+      } catch (Exception e) {
+        throw Throwables.propagate(e);
+      }
+    }, WaitForOptions.defaults().setTimeoutMs(timeoutMs));
   }
 
   /**
@@ -89,7 +112,7 @@ public final class IntegrationTestUtils {
           List<Long> blocksToRemove = Whitebox.getInternalState(reporter, "mRemovedBlocks");
           return blocksToRemove.containsAll(Arrays.asList(blockIds));
         }
-      }, WaitForOptions.defaults().setTimeout(100 * Constants.SECOND_MS));
+      }, WaitForOptions.defaults().setTimeoutMs(100 * Constants.SECOND_MS));
 
       // Execute 2nd heartbeat from worker.
       HeartbeatScheduler.execute(HeartbeatContext.WORKER_BLOCK_SYNC);

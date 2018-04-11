@@ -15,6 +15,7 @@ import alluxio.AlluxioURI;
 import alluxio.Configuration;
 import alluxio.LocalAlluxioClusterResource;
 import alluxio.PropertyKey;
+import alluxio.BaseIntegrationTest;
 import alluxio.client.file.FileOutStream;
 import alluxio.client.file.FileSystem;
 import alluxio.client.file.FileSystemUtils;
@@ -36,12 +37,12 @@ import java.util.concurrent.TimeUnit;
 /**
  * Tests for {@link alluxio.client.file.FileSystemUtils}.
  */
-public class FileSystemUtilsIntegrationTest {
+public class FileSystemUtilsIntegrationTest extends BaseIntegrationTest {
   private static final int USER_QUOTA_UNIT_BYTES = 1000;
   @ClassRule
   public static LocalAlluxioClusterResource sLocalAlluxioClusterResource =
       new LocalAlluxioClusterResource.Builder()
-          .setProperty(PropertyKey.USER_FILE_BUFFER_BYTES, Integer.toString(USER_QUOTA_UNIT_BYTES))
+          .setProperty(PropertyKey.USER_FILE_BUFFER_BYTES, USER_QUOTA_UNIT_BYTES)
           .build();
   private static CreateFileOptions sWriteBoth;
   private static FileSystem sFileSystem = null;

@@ -6,12 +6,15 @@ group: Deploying Alluxio
 priority: 4
 ---
 
+* Table of Contents
+{:toc}
+
 Alluxio with Fault Tolerance can be deployed on Amazon EC2 using the
 [Vagrant scripts](https://github.com/alluxio/alluxio/tree/master/deploy/vagrant) that come with
 Alluxio. The scripts let you create, configure, and destroy clusters that come automatically
 configured with Apache HDFS.
 
-# Prerequisites
+## Prerequisites
 
 **Install Vagrant and the AWS plugins**
 
@@ -23,9 +26,7 @@ Install AWS Vagrant plugin:
 
 **Install Alluxio**
 
-Download Alluxio to your local machine, and unzip it:
-
-{% include Common-Commands/download-alluxio.md %}
+[Download Alluxio](https://alluxio.org/download) to your local machine, and unzip it:
 
 **Install python library dependencies**
 
@@ -41,7 +42,7 @@ in `deploy/vagrant` run:
 {% include Running-Alluxio-Fault-Tolerant-on-EC2/install-pip.md %}
 
 
-# Launch a Cluster
+## Launch a Cluster
 
 To run an Alluxio cluster on EC2, first sign up for an Amazon EC2 account
 on the [Amazon Web Services site](http://aws.amazon.com/).
@@ -64,7 +65,7 @@ Copy `deploy/vagrant/conf/ec2.yml.template` to `deploy/vagrant/conf/ec2.yml` by:
 In the configuration file `deploy/vagrant/conf/ec2.yml`, set the value of `Keypair` to your keypair
 name and `Key_Path` to the path to the pem key.
 
-In the configuration file `deploy/vagrant/conf/ufs.yml`, either set the value of `Type` to `hadoop` or
+In the configuration file `deploy/vagrant/conf/ufs.yml`, either set the value of `Type` to `hadoop2` or
 specify an S3 bucket for the `Bucket` field.
 
 In the configuration file `deploy/vagrant/conf/alluxio.yml`, set the value of `Masters` to the
@@ -89,7 +90,7 @@ Note that the `<number of machines>` above should be larger than or equal to `Ma
 Each node of the cluster has an Alluxio worker and each master node has an Alluxio master. The leader
 is in one of the master nodes.
 
-# Access the cluster
+## Access the cluster
 
 **Access through Web UI**
 
@@ -170,7 +171,7 @@ From a node in the cluster, you can ssh to other nodes in the cluster without pa
 
 {% include Running-Alluxio-Fault-Tolerant-on-EC2/ssh-other-node.md %}
 
-# Destroy the cluster
+## Destroy the cluster
 
 Under `deploy/vagrant` directory, you can run
 

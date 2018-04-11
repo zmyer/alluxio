@@ -13,7 +13,7 @@ package alluxio.wire;
 
 import alluxio.util.CommonUtils;
 
-import org.codehaus.jackson.map.ObjectMapper;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.Assert;
 import org.junit.Test;
 
@@ -23,8 +23,6 @@ public class JobConfInfoTest {
 
   /**
    * Test to convert between a JobConfInfo type and a json type.
-   *
-   * @throws Exception if an error occurs during convert between JobConfInfo type and json type
    */
   @Test
   public void json() throws Exception {

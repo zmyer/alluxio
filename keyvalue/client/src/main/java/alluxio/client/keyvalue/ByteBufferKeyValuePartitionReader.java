@@ -11,7 +11,6 @@
 
 package alluxio.client.keyvalue;
 
-import alluxio.Constants;
 import alluxio.exception.AlluxioException;
 import alluxio.util.io.BufferUtils;
 import alluxio.util.io.ByteIOUtils;
@@ -33,7 +32,8 @@ import javax.annotation.concurrent.NotThreadSafe;
  */
 @NotThreadSafe
 public final class ByteBufferKeyValuePartitionReader implements KeyValuePartitionReader {
-  private static final Logger LOG = LoggerFactory.getLogger(Constants.LOGGER_TYPE);
+  private static final Logger LOG =
+      LoggerFactory.getLogger(ByteBufferKeyValuePartitionReader.class);
 
   private Index mIndex;
   private PayloadReader mPayloadReader;
@@ -48,7 +48,7 @@ public final class ByteBufferKeyValuePartitionReader implements KeyValuePartitio
    * @param fileBytes the byte buffer as underline storage to read from
    */
   public ByteBufferKeyValuePartitionReader(ByteBuffer fileBytes) {
-    mBuf = Preconditions.checkNotNull(fileBytes);
+    mBuf = Preconditions.checkNotNull(fileBytes, "fileBytes");
     mBufferLength = mBuf.remaining();
     mIndex = createIndex();
     mPayloadReader = createPayloadReader();

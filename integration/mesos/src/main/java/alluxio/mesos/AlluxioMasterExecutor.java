@@ -11,10 +11,9 @@
 
 package alluxio.mesos;
 
-import alluxio.Constants;
 import alluxio.cli.Format;
 import alluxio.master.AlluxioMaster;
-import alluxio.underfs.UnderFileSystemRegistry;
+import alluxio.underfs.UnderFileSystemFactoryRegistry;
 
 import org.apache.mesos.Executor;
 import org.apache.mesos.ExecutorDriver;
@@ -31,7 +30,7 @@ import javax.annotation.concurrent.ThreadSafe;
  */
 @ThreadSafe
 public class AlluxioMasterExecutor implements Executor {
-  private static final Logger LOG = LoggerFactory.getLogger(Constants.LOGGER_TYPE);
+  private static final Logger LOG = LoggerFactory.getLogger(AlluxioMasterExecutor.class);
 
   /**
    * Creates a new {@link AlluxioMasterExecutor}.
@@ -73,9 +72,9 @@ public class AlluxioMasterExecutor implements Executor {
           LOG.info("Launching task {}", task.getTaskId().getValue());
 
           Thread.currentThread().setContextClassLoader(
-              UnderFileSystemRegistry.class.getClassLoader());
+              UnderFileSystemFactoryRegistry.class.getClassLoader());
 
-          Format.format("master");
+          Format.format(Format.Mode.MASTER);
           AlluxioMaster.main(new String[] {});
 
           status =
@@ -112,7 +111,6 @@ public class AlluxioMasterExecutor implements Executor {
    * Starts the Alluxio master executor.
    *
    * @param args command-line arguments
-   * @throws Exception if the executor encounters an unrecoverable error
    */
   public static void main(String[] args) throws Exception {
     MesosExecutorDriver driver = new MesosExecutorDriver(new AlluxioMasterExecutor());

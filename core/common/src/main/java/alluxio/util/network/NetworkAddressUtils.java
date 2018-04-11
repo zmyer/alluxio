@@ -13,16 +13,20 @@ package alluxio.util.network;
 
 import alluxio.AlluxioURI;
 import alluxio.Configuration;
-import alluxio.Constants;
-import alluxio.MasterInquireClient;
 import alluxio.PropertyKey;
-import alluxio.exception.PreconditionMessage;
+import alluxio.exception.ConnectionFailedException;
+import alluxio.exception.status.UnauthenticatedException;
+import alluxio.security.authentication.TProtocols;
+import alluxio.security.authentication.TransportProvider;
+import alluxio.util.CommonUtils;
 import alluxio.util.OSUtils;
 import alluxio.wire.WorkerNetAddress;
 
 import com.google.common.base.Preconditions;
-import com.google.common.base.Throwables;
+import io.netty.channel.unix.DomainSocketAddress;
+import org.apache.thrift.protocol.TProtocol;
 import org.apache.thrift.transport.TServerSocket;
+import org.apache.thrift.transport.TTransportException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -34,12 +38,13 @@ import java.net.InetSocketAddress;
 import java.net.NetworkInterface;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.net.SocketAddress;
 import java.net.UnknownHostException;
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Enumeration;
 import java.util.List;
 
+import javax.annotation.Nullable;
 import javax.annotation.concurrent.ThreadSafe;
 
 /**
@@ -47,13 +52,14 @@ import javax.annotation.concurrent.ThreadSafe;
  */
 @ThreadSafe
 public final class NetworkAddressUtils {
+  private static final Logger LOG = LoggerFactory.getLogger(NetworkAddressUtils.class);
+
   public static final String WILDCARD_ADDRESS = "0.0.0.0";
 
   /**
    * Checks if the underlying OS is Windows.
    */
   public static final boolean WINDOWS = OSUtils.isWindows();
-  private static final Logger LOG = LoggerFactory.getLogger(Constants.LOGGER_TYPE);
 
   private static String sLocalHost;
   private static String sLocalIP;
@@ -62,7 +68,7 @@ public final class NetworkAddressUtils {
 
   /**
    * Different types of services that client uses to connect. These types also indicate the service
-   * bind address
+   * bind address.
    */
   public enum ServiceType {
     /**
@@ -269,6 +275,18 @@ public final class NetworkAddressUtils {
   }
 
   /**
+   * Helper method to get the bind hostname for a given service.
+   *
+   * @param service the service name
+   * @return the InetSocketAddress the service will bind to
+   */
+  public static InetSocketAddress getBindAddress(ServiceType service) {
+    int port = getPort(service);
+    assertValidPort(port);
+    return new InetSocketAddress(getBindHost(service), getPort(service));
+  }
+
+  /**
    * Helper method to get the {@link InetSocketAddress} bind address on a given service.
    * <p>
    * Host bind information searching order:
@@ -278,25 +296,61 @@ public final class NetworkAddressUtils {
    * <li>A externally resolvable local hostname for the host this JVM is running on
    * </ol>
    *
-   * @param service the service name used to connect
-   * @return the InetSocketAddress the service will bind to
+   * @param service the service name
+   * @return the bind hostname
    */
-  public static InetSocketAddress getBindAddress(ServiceType service) {
-    int port = getPort(service);
-    assertValidPort(port);
-
-    String host;
+  public static String getBindHost(ServiceType service) {
     if (Configuration.containsKey(service.mBindHostKey) && !Configuration.get(service.mBindHostKey)
         .isEmpty()) {
-      host = Configuration.get(service.mBindHostKey);
+      return Configuration.get(service.mBindHostKey);
     } else {
-      host = getLocalHostName();
+      return getLocalHostName();
     }
-    return new InetSocketAddress(host, port);
   }
 
   /**
-   * Gets a local host name for the host this JVM is running on.
+   * Gets the local hostname to be used by the client. If this isn't configured, a non-loopback
+   * local hostname will be looked up.
+   *
+   * @return the local hostname for the client
+   */
+  public static String getClientHostName() {
+    if (Configuration.containsKey(PropertyKey.USER_HOSTNAME)) {
+      return Configuration.get(PropertyKey.USER_HOSTNAME);
+    }
+    return getLocalHostName();
+  }
+
+  /**
+   * Gets a local node name from configuration if it is available, falling back on localhost lookup.
+   *
+   * @return the local node name
+   */
+  public static String getLocalNodeName() {
+    switch (CommonUtils.PROCESS_TYPE.get()) {
+      case CLIENT:
+        if (Configuration.containsKey(PropertyKey.USER_HOSTNAME)) {
+          return Configuration.get(PropertyKey.USER_HOSTNAME);
+        }
+        break;
+      case MASTER:
+        if (Configuration.containsKey(PropertyKey.MASTER_HOSTNAME)) {
+          return Configuration.get(PropertyKey.MASTER_HOSTNAME);
+        }
+        break;
+      case WORKER:
+        if (Configuration.containsKey(PropertyKey.WORKER_HOSTNAME)) {
+          return Configuration.get(PropertyKey.WORKER_HOSTNAME);
+        }
+        break;
+      default:
+        break;
+    }
+    return getLocalHostName();
+  }
+
+  /**
+   * Gets a local hostname for the host this JVM is running on.
    *
    * @return the local host name, which is not based on a loopback ip address
    */
@@ -305,7 +359,7 @@ public final class NetworkAddressUtils {
       return sLocalHost;
     }
     int hostResolutionTimeout =
-        Configuration.getInt(PropertyKey.NETWORK_HOST_RESOLUTION_TIMEOUT_MS);
+        (int) Configuration.getMs(PropertyKey.NETWORK_HOST_RESOLUTION_TIMEOUT_MS);
     return getLocalHostName(hostResolutionTimeout);
   }
 
@@ -325,7 +379,7 @@ public final class NetworkAddressUtils {
       sLocalHost = InetAddress.getByName(getLocalIpAddress(timeoutMs)).getCanonicalHostName();
       return sLocalHost;
     } catch (UnknownHostException e) {
-      throw Throwables.propagate(e);
+      throw new RuntimeException(e);
     }
   }
 
@@ -339,7 +393,7 @@ public final class NetworkAddressUtils {
       return sLocalIP;
     }
     int hostResolutionTimeout =
-        Configuration.getInt(PropertyKey.NETWORK_HOST_RESOLUTION_TIMEOUT_MS);
+        (int) Configuration.getMs(PropertyKey.NETWORK_HOST_RESOLUTION_TIMEOUT_MS);
     return getLocalIpAddress(hostResolutionTimeout);
   }
 
@@ -390,15 +444,15 @@ public final class NetworkAddressUtils {
           }
         }
 
-        LOG.warn("Your hostname, " + InetAddress.getLocalHost().getHostName() + " resolves to"
-            + " a loopback/non-reachable address: " + address.getHostAddress()
-            + ", but we couldn't find any external IP address!");
+        LOG.warn("Your hostname, {} resolves to a loopback/non-reachable address: {}, "
+                  +  "but we couldn't find any external IP address!",
+                  InetAddress.getLocalHost().getHostName(), address.getHostAddress());
       }
 
       sLocalIP = address.getHostAddress();
       return sLocalIP;
     } catch (IOException e) {
-      throw Throwables.propagate(e);
+      throw new RuntimeException(e);
     }
   }
 
@@ -428,7 +482,6 @@ public final class NetworkAddressUtils {
    * @param timeoutMs Timeout in milliseconds to use for checking that a possible local IP is
    *        reachable
    * @return a {@code boolean} indicating if the given address is externally resolvable address
-   * @throws IOException if the address resolution fails
    */
   private static boolean isValidAddress(InetAddress address, int timeoutMs) throws IOException {
     return !address.isAnyLocalAddress() && !address.isLinkLocalAddress()
@@ -444,6 +497,7 @@ public final class NetworkAddressUtils {
    *         hostname is embedded, or null if the given path is null or empty.
    * @throws UnknownHostException if the hostname cannot be resolved
    */
+  @Nullable
   public static AlluxioURI replaceHostName(AlluxioURI path) throws UnknownHostException {
     if (path == null) {
       return null;
@@ -468,12 +522,27 @@ public final class NetworkAddressUtils {
    * @return the canonical form of the hostname, or null if it is null or empty
    * @throws UnknownHostException if the given hostname cannot be resolved
    */
+  @Nullable
   public static String resolveHostName(String hostname) throws UnknownHostException {
     if (hostname == null || hostname.isEmpty()) {
       return null;
     }
 
     return InetAddress.getByName(hostname).getCanonicalHostName();
+  }
+
+  /**
+   * Resolves a given hostname IP address.
+   *
+   * @param hostname the input hostname, which could be an alias
+   * @return the hostname IP address
+   * @throws UnknownHostException if the given hostname cannot be resolved
+   */
+  public static String resolveIpAddress(String hostname) throws UnknownHostException {
+    Preconditions.checkNotNull(hostname, "hostname");
+    Preconditions.checkArgument(!hostname.isEmpty(),
+            "Cannot resolve IP address for empty hostname");
+    return InetAddress.getByName(hostname).getHostAddress();
   }
 
   /**
@@ -526,7 +595,7 @@ public final class NetworkAddressUtils {
       field.setAccessible(true);
       return (ServerSocket) field.get(thriftSocket);
     } catch (NoSuchFieldException | IllegalAccessException e) {
-      throw Throwables.propagate(e);
+      throw new RuntimeException(e);
     }
   }
 
@@ -535,8 +604,8 @@ public final class NetworkAddressUtils {
    *
    * @param address socket address to parse
    * @return InetSocketAddress of the String
-   * @throws IOException if the socket address is invalid
    */
+  @Nullable
   public static InetSocketAddress parseInetSocketAddress(String address) throws IOException {
     if (address == null) {
       return null;
@@ -555,80 +624,53 @@ public final class NetworkAddressUtils {
    * @return InetSocketAddress
    */
   public static InetSocketAddress getRpcPortSocketAddress(WorkerNetAddress netAddress) {
-    try {
-      String host = getFqdnHost(netAddress);
-      int port = netAddress.getRpcPort();
-      return new InetSocketAddress(host, port);
-    } catch (UnknownHostException e) {
-      throw Throwables.propagate(e);
-    }
+    String host = netAddress.getHost();
+    int port = netAddress.getRpcPort();
+    return new InetSocketAddress(host, port);
   }
 
   /**
-   * Extracts dataPort InetSocketAddress from Alluxio representation of network address.
+   * Extracts dataPort socket address from Alluxio representation of network address.
    *
    * @param netAddress the input network address representation
-   * @return InetSocketAddress
+   * @return the socket address
    */
-  public static InetSocketAddress getDataPortSocketAddress(WorkerNetAddress netAddress) {
-    try {
-      String host = getFqdnHost(netAddress);
+  public static SocketAddress getDataPortSocketAddress(WorkerNetAddress netAddress) {
+    SocketAddress address;
+    if (NettyUtils.isDomainSocketSupported(netAddress)) {
+      address = new DomainSocketAddress(netAddress.getDomainSocketPath());
+    } else {
+      String host = netAddress.getHost();
       int port = netAddress.getDataPort();
-      return new InetSocketAddress(host, port);
-    } catch (UnknownHostException e) {
-      throw Throwables.propagate(e);
+      address = new InetSocketAddress(host, port);
     }
+    return address;
   }
 
   /**
-   * Get the active master address from zookeeper for the fault tolerant Alluxio masters.
+   * Test if the input address is serving an Alluxio service. This method make use of the
+   * Thrift protocol for performing service communication.
    *
-   * @param zkLeaderPath the Zookeeper path containing the leader master address
-   * @return InetSocketAddress the active master address retrieved from zookeeper
+   * @param address the network address to ping
+   * @param serviceName the Alluxio service name
+   * @throws UnauthenticatedException If the user is not authenticated
+   * @throws ConnectionFailedException If there is a protocol transport error
    */
-  public static InetSocketAddress getLeaderAddressFromZK(String zkLeaderPath) {
-    Preconditions.checkState(Configuration.containsKey(PropertyKey.ZOOKEEPER_ADDRESS),
-        PreconditionMessage.ERR_ZK_ADDRESS_NOT_SET.toString(),
-        PropertyKey.ZOOKEEPER_ADDRESS.toString());
-    Preconditions.checkState(Configuration.containsKey(PropertyKey.ZOOKEEPER_ELECTION_PATH),
-        PropertyKey.ZOOKEEPER_ELECTION_PATH.toString());
-    MasterInquireClient masterInquireClient =
-        MasterInquireClient.getClient(
-        Configuration.get(PropertyKey.ZOOKEEPER_ADDRESS),
-        Configuration.get(PropertyKey.ZOOKEEPER_ELECTION_PATH), zkLeaderPath);
+  public static void pingService(InetSocketAddress address, String serviceName)
+          throws UnauthenticatedException, ConnectionFailedException {
+    Preconditions.checkNotNull(address, "address");
+    Preconditions.checkNotNull(serviceName, "serviceName");
+    Preconditions.checkArgument(!serviceName.isEmpty(),
+            "Cannot resolve for empty service name");
     try {
-      String temp = masterInquireClient.getLeaderAddress();
-      return NetworkAddressUtils.parseInetSocketAddress(temp);
-    } catch (IOException e) {
-      LOG.error(e.getMessage(), e);
-      throw Throwables.propagate(e);
+      TransportProvider transportProvider = TransportProvider.Factory.create();
+      TProtocol protocol = TProtocols.createProtocol(transportProvider.getClientTransport(address),
+          serviceName);
+      protocol.getTransport().open();
+      protocol.getTransport().close();
+    } catch (TTransportException e) {
+      throw new ConnectionFailedException(e.getMessage());
     }
   }
 
-  /**
-   * @return InetSocketAddress the list of all master addresses from zookeeper
-   */
-  public static List<InetSocketAddress> getMasterAddressesFromZK() {
-    Preconditions.checkState(Configuration.containsKey(PropertyKey.ZOOKEEPER_ADDRESS));
-    Preconditions.checkState(Configuration.containsKey(PropertyKey.ZOOKEEPER_ELECTION_PATH));
-    Preconditions.checkState(Configuration.containsKey(PropertyKey.ZOOKEEPER_LEADER_PATH));
-    MasterInquireClient masterInquireClient = MasterInquireClient.getClient(
-        Configuration.get(PropertyKey.ZOOKEEPER_ADDRESS),
-        Configuration.get(PropertyKey.ZOOKEEPER_ELECTION_PATH),
-        Configuration.get(PropertyKey.ZOOKEEPER_LEADER_PATH));
-    List<String> addresses = masterInquireClient.getMasterAddresses();
-    if (addresses == null) {
-      throw new RuntimeException(String.format("Failed to get the master addresses from zookeeper, "
-          + "zookeeper address: %s", Configuration.get(PropertyKey.ZOOKEEPER_ADDRESS)));
-    }
-    List<InetSocketAddress> ret = new ArrayList<>(addresses.size());
-    try {
-      for (String address : addresses) {
-        ret.add(NetworkAddressUtils.parseInetSocketAddress(address));
-      }
-      return ret;
-    } catch (IOException e) {
-      throw Throwables.propagate(e);
-    }
-  }
 }

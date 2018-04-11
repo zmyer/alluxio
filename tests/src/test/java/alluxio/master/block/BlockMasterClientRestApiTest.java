@@ -11,6 +11,8 @@
 
 package alluxio.master.block;
 
+import static org.junit.Assert.assertEquals;
+
 import alluxio.Constants;
 import alluxio.rest.RestApiTest;
 import alluxio.rest.TestCase;
@@ -19,7 +21,6 @@ import alluxio.worker.block.BlockWorker;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.common.collect.Iterables;
-import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
 
@@ -37,7 +38,7 @@ public final class BlockMasterClientRestApiTest extends RestApiTest {
   @Before
   public void before() throws Exception {
     mHostname = mResource.get().getHostname();
-    mPort = mResource.get().getMaster().getInternalMaster().getWebAddress().getPort();
+    mPort = mResource.get().getLocalAlluxioMaster().getMasterProcess().getWebAddress().getPort();
     mServicePrefix = BlockMasterClientRestServiceHandler.SERVICE_PREFIX;
   }
 
@@ -60,7 +61,7 @@ public final class BlockMasterClientRestApiTest extends RestApiTest {
     String tierAlias = "MEM";
     long initialBytes = 3;
 
-    BlockWorker blockWorker = mResource.get().getWorker().getBlockWorker();
+    BlockWorker blockWorker = mResource.get().getWorkerProcess().getWorker(BlockWorker.class);
     String file = blockWorker.createBlock(sessionId, blockId, tierAlias, initialBytes);
     FileOutputStream outStream = new FileOutputStream(file);
     outStream.write("abc".getBytes());
@@ -73,8 +74,8 @@ public final class BlockMasterClientRestApiTest extends RestApiTest {
         getEndpoint(BlockMasterClientRestServiceHandler.GET_BLOCK_INFO), params, HttpMethod.GET,
         null).call();
     BlockInfo blockInfo = new ObjectMapper().readValue(response, BlockInfo.class);
-    Assert.assertEquals(blockId, blockInfo.getBlockId());
-    Assert.assertEquals(initialBytes, blockInfo.getLength());
-    Assert.assertEquals("MEM", Iterables.getOnlyElement(blockInfo.getLocations()).getTierAlias());
+    assertEquals(blockId, blockInfo.getBlockId());
+    assertEquals(initialBytes, blockInfo.getLength());
+    assertEquals("MEM", Iterables.getOnlyElement(blockInfo.getLocations()).getTierAlias());
   }
 }

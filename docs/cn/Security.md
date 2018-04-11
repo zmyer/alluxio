@@ -6,25 +6,26 @@ group: Features
 priority: 1
 ---
 
-* Table of Contents
+* 内容列表
 {:toc}
 
-Alluxio安全性目前有两个特性，该文档介绍它们的概念以及用法。
+Alluxio安全性目前有三个特性，该文档介绍它们的概念以及用法。
 
-1. [安全认证](#authentication)：在启用安全认证的情况下，Alluxio文件系统能够识别确认访问用户的身份，这是访问权限以及加密等其他安全特性的基础。
+1. [安全认证](#authentication)：在启用安全认证的情况下，Alluxio文件系统能够识别确认访问用户的身份，这是访问权限等其他安全特性的基础。
 2. [访问权限控制](#authorization)：在启用访问权限控制的情况下，Alluxio文件系统能够控制用户的访问，Alluxio使用POSIX标准的授权模型赋予用户相应访问权限。
+3. [审查机制](#auditing)：在启用审查机制的情况下,Alluxio文件系统会维护一个审查日志，用于记录用户获取文件元数据。
 
 默认情况下，Alluxio会以SIMPLE安全模式启动并要求一个简单的认证。
 SIMPLE模式表明服务端信任客户端声明的任何身份。
 参考[安全性配置项](Configuration-Settings.html#security-configuration)的信息以启用安全特性。
 
-# 安全认证 {#Authentication}
+## 安全认证 {#Authentication}
 
 Alluxio通过Thrift RPC提供文件系统服务，客户端（代表一个用户）和服务端（例如master）应该通过认证建立连接以通信，若认证成功，则建立连接；若失败，则该连接不应当被建立，并且会向客户端抛出一个异常。
 
 目前支持三种认证模式：SIMPLE（默认模式）、CUSTOM以及NOSASL。
 
-## 用户账户
+### 用户账户
 
 Alluxio中的通信实体包括master、worker以及client，其中各者都需要了解运行它们的用户是谁，即登录用户。Alluxio使用JAAS (Java Authentication and
 Authorization Service)确认执行任务的用户的身份。
@@ -39,24 +40,24 @@ Authorization Service)确认执行任务的用户的身份。
 1. 对于master，登录用户即为Alluxio文件系统的超级用户，同时也是根目录的所属用户。
 2. 对于worker和client，登录用户与master通信从而访问文件，其通过RPC连接传输到master节点进行认证。
 
-## NOSASL
+### NOSASL
 
-禁用安全认证，Alluxio文件系统行为和之前一致。
-SASL (Simple Authentication and Security Layer)是一个定义客户端和服务端应用之间安全认证的框架，该框架被Alluxio使用以实现安全认证，因此NOSASL表示禁用。
+禁用安全认证。
+SASL (Simple Authentication and Security Layer)是一个定义客户端和服务端应用之间安全认证的框架，该框架被Alluxio使用以实现安全认证，因此NOSASL表示禁用并且Alluxio文件系统行为和之前一致。
 
-## SIMPLE
+### SIMPLE
 
 启用安全认证。Alluxio文件系统能够知道访问用户的身份，并简单地认为该用户的身份与他声称的一致。
 
 在用户创建目录或文件后，该用户的用户名被添加到元数据中。该用户的信息可以在CLI和UI中进行查看。
 
-## CUSTOM
+### CUSTOM
 
 启用安全认证。Alluxio文件系统能够知道访问用户的身份，并且通过已定义的`AuthenticationProvider`对该用户身份进行确认。
 
 该模式目前在实验阶段，只在测试中使用。
 
-# 访问权限控制 {#Authorization}
+## 访问权限控制 {#Authorization}
 
 Alluxio文件系统为目录和文件实现了一个访问权限模型，该模型与POSIX标准的访问权限模型类似。
 
@@ -84,7 +85,7 @@ Alluxio文件系统为目录和文件实现了一个访问权限模型，该模�
 
 {% include Security/lsr.md %}
 
-## 用户-组映射 {#user-group-mapping}
+### 用户-组映射 {#user-group-mapping}
 
 当用户确定后，其组列表通过一个组映射服务确定，该服务通过`alluxio.security.group.mapping.class`配置，其默认实现是
 `alluxio.security.group.provider.ShellBasedUnixGroupsMapping`，该实现通过执行`groups` shell命令获取一个给定用户的组关系。
@@ -92,11 +93,11 @@ Alluxio文件系统为目录和文件实现了一个访问权限模型，该模�
 
 `alluxio.security.authorization.permission.supergroup`属性定义了一个超级组，该组中的所有用户都是超级用户。
 
-## 目录和文件初始访问权限
+### 目录和文件初始访问权限
 
 初始创建访问权限是777,并且目录和文件的区别为111。默认的umask值为022，新创建的目录权限为755，文件为644。umask可以通过`alluxio.security.authorization.permission.umask`属性设置。
 
-## 更新目录和文件访问权限
+### 更新目录和文件访问权限
 
 所属用户、所属组以及访问权限可以通过以下两种方式进行修改：
 
@@ -106,10 +107,56 @@ Alluxio文件系统为目录和文件实现了一个访问权限模型，该模�
 所属用户只能由超级用户修改。
 所属组和访问权限只能由超级用户和文件所有者修改。
 
-# 加密
+## 审查
+Alluxio支持审查日志用于系统管理员追踪用户对文件元数据的访问操作。
+
+审查日志文件(`master_audit.log`) 包括多个审查记录条目，每个条目对应一次文件元数据获取记录。
+Alluxio审查日志格式如下表所示：
+
+<table class="table table-striped">
+<tr><th>key</th><th>value</th></tr>
+<tr>
+  <td>succeeded</td>
+  <td>如果命令成功运行，值为true。在命令成功运行前，该命令必须是被允许的。 </td>
+</tr>
+<tr>
+  <td>allowed</td>
+  <td>如果命令是被允许的，值为true。即使一条命令是被允许的它也可能运行失败。 </td>
+</tr>
+<tr>
+  <td>ugi</td>
+  <td>用户组信息，包括用户名，主要组，认证类型。 </td>
+</tr>
+<tr>
+  <td>ip</td>
+  <td>客户端IP地址。 </td>
+</tr>
+<tr>
+  <td>cmd</td>
+  <td>用户运行的命令。 </td>
+</tr>
+<tr>
+  <td>src</td>
+  <td>源文件或目录地址。 </td>
+</tr>
+<tr>
+  <td>dst</td>
+  <td>目标文件或目录的地址。如果不适用，值为空。 </td>
+</tr>
+<tr>
+  <td>perm</td>
+  <td>user:group:mask，如果不适用值为空。 </td>
+</tr>
+</table>
+
+它和HDfS审查日志的格式很像，参考[wiki](https://wiki.apache.org/hadoop/HowToConfigure)。
+
+要使用Alluxio审查记录功能，你需要将JVM参数`alluxio.master.audit.logging.enabled`设置为true，具体可见[Configuration settings](Configuration-Settings.html)。
+
+## 加密
 
 目前，服务层的加解密方案还没有完成，但是用户可以在应用层对敏感数据进行加密，或者是开启底层系统的加密功能，比如，HDFS的透明加解密，Linux的磁盘加密。
 
-# 部署
+## 部署
 
 推荐由同一个用户启动Alluxio master和workers。Alluxio集群服务包括master和workers，每个worker需要通过RPC与master通信以进行某些文件操作。如果一个worker的用户与master的不一致，这些文件操作可能会由于权限检查而失败。

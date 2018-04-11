@@ -40,7 +40,7 @@ Maven构建环境将自动获取依赖，编译源码，运行单元测试，并
 
 {% include Common-Commands/stop-alluxio.md %}
 
-# 单元测试
+## 单元测试
 
 运行所有单元测试：
 
@@ -58,45 +58,74 @@ Maven构建环境将自动获取依赖，编译源码，运行单元测试，并
 
 {% include Building-Alluxio-Master-Branch/STDOUT.md %}
 
-# 多种发行版支持
+## 计算框架支持
+针对不同的计算框架构建Alluxio，可以使用不同的计算配置文件运行Maven构建。 生成的Alluxio客户端位于`{{site.ALLUXIO_CLIENT_JAR_PATH}}`。
 
-要针对不同hadoop发行版构建Alluxio，只需修改`hadoop.version`：
+### Hadoop
 
-## Apache
+你可以运行以下命令以使用Hadoop编译Alluxio。
+
+```bash
+$ mvn install -P<HADOOP_PROFILE> -DskipTests
+```
+
+对于不同的Hadoop发行版，可用的Hadoop配置文件包括`hadoop-1`, `hadoop-2.2`, `hadoop-2.3` ... `hadoop-2.8`。通过查看[这节](#发行版支持)，你可以进一步设置特定的Hadoop发行版来编译。
+
+
+
+### Spark/Flink/Presto和其他框架
+
+你可以运行以下命令编译不同计算框架的Alluxio服务器和客户端Jar包。
+
+```bash
+$ mvn install -DskipTests
+```
+
+## 发行版支持
+
+要针对不同hadoop发行版构建Alluxio，只需修改  
+`hadoop.version`。你可以运行以下命令：
+
+```bash
+$ mvn install -P<HADOOP_PROFILE> -Dhadoop.version=<HADOOP_VERSION> -DskipTests
+```
+其中`<HADOOP_VERSION>`可以根据不同的发行版设置
+
+### Apache
 
 由于所有主要构建版本都来自Apache，因此所有Apache发行版可以直接使用
 
 {% include Building-Alluxio-Master-Branch/Apache.md %}
 
-## Cloudera
+### Cloudera
 
 对于Cloudera发行版，使用该形式`$apacheRelease-cdh$cdhRelease`的版本号
 
 {% include Building-Alluxio-Master-Branch/Cloudera.md %}
 
-## MapR
+### MapR
 
 对于MapR发行版，其值为
 
 {% include Building-Alluxio-Master-Branch/MapR.md %}
 
-## Pivotal
+### Pivotal
 
 对于Pivotal发行版，使用`$apacheRelease-gphd-$pivotalRelease`形式的版本号
 
 {% include Building-Alluxio-Master-Branch/Pivotal.md %}
 
-## Hortonworks
+### Hortonworks
 
 对于Hortonworks发行版，使用`$apacheRelease.$hortonRelease`形式的版本号
 
 {% include Building-Alluxio-Master-Branch/Hortonworks.md %}
 
-# 系统设置
+## 系统设置
 
 有时为了在本地通过单元测试，需要进行些系统设置，常用的一个设置项为ulimit。
 
-## Mac
+### Mac
 
 为增加允许的文件以及进程数目，执行以下命令：
 

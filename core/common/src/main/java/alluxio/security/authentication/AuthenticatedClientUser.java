@@ -38,11 +38,6 @@ public final class AuthenticatedClientUser {
   private static ThreadLocal<User> sUserThreadLocal = new ThreadLocal<>();
 
   /**
-   * Constructs a new {@link AuthenticatedClientUser}.
-   */
-  public AuthenticatedClientUser() {}
-
-  /**
    * Creates a {@link User} and sets it to the {@link ThreadLocal} variable.
    *
    * @param userName the name of the client user
@@ -55,7 +50,6 @@ public final class AuthenticatedClientUser {
    * Gets the {@link User} from the {@link ThreadLocal} variable.
    *
    * @return the client user, null if the user is not present
-   * @throws IOException if authentication is not enabled
    */
   // TODO(peis): Fail early if the user is not able to be set to avoid returning null.
   public static User get() throws IOException {
@@ -91,4 +85,6 @@ public final class AuthenticatedClientUser {
   public static synchronized void remove() {
     sUserThreadLocal.remove();
   }
+
+  private AuthenticatedClientUser() {} // prevent instantiation
 }

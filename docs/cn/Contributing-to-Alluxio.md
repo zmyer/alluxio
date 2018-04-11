@@ -5,7 +5,7 @@ nickname: 开发者向导
 group: Resources
 ---
 
-* Table of Contents
+* 内容列表
 {:toc}
 
 感谢您对Alluxio的兴趣！我们非常感谢任何的新特性或者修复的贡献。
@@ -28,7 +28,9 @@ group: Resources
 
 5.  [构建Alluxio主分支](Building-Alluxio-Master-Branch.html)
 
-6.  Fork Alluxio Github仓库，并添加一两个单元测试或者javadoc文件，再提交一个pull request。也欢迎你处理我们的[JIRA](https://alluxio.atlassian.net/browse/ALLUXIO)中的issues。这里是专门为新开发者准备的一些[任务](https://alluxio.atlassian.net/issues/?jql=project%20%3D%20ALLUXIO%20AND%20labels%20%3D%20NewContributor%20AND%20status%20%3D%20OPEN)。请每个新开发者最多只完成的两个New-Contributor任务。在这之后，尝试去做一些Beginner/Intermediate任务，或者在[User Mailing List](https://groups.google.com/forum/?fromgroups#!forum/alluxio-users)里咨询。可以查看Github向导中的[forking a repo](https://help.github.com/articles/fork-a-repo)和[sending a pull request](https://help.github.com/articles/using-pull-requests)学习如何进行基本Github操作。
+6.  Fork Alluxio Github仓库，并添加一两个单元测试或者javadoc文件，再提交一个pull request。也欢迎你处理我们的[JIRA](https://alluxio.atlassian.net/browse/ALLUXIO)中的issues。这里是一些未分配的[新开发者任务](https://alluxio.atlassian.net/issues/?jql=project%20%3D%20ALLUXIO%20AND%20status%20%3D%20Open%20AND%20labels%20%3D%20NewContributor%20AND%20assignee%20in%20(EMPTY))。
+请每个新开发者最多只完成的两个New-Contributor任务。
+在这之后，尝试去做一些Beginner/Intermediate任务，或者在[User Mailing List](https://groups.google.com/forum/?fromgroups#!forum/alluxio-users)里咨询。可以查看Github向导中的[forking a repo](https://help.github.com/articles/fork-a-repo)和[sending a pull request](https://help.github.com/articles/using-pull-requests)学习如何进行基本Github操作。
 
 ### 提交代码
 
@@ -80,13 +82,16 @@ group: Resources
 
 -   要进行Hadoop文件系统的契约式设计测试（用hadoop 2.6.0），运行：`mvn -PcontractTest clean test`。
 
+-   如果libfuse库丢失，测试将被忽略。要运行这些测试，请安装[本页]中所提到的正确的库(Mounting-Alluxio-FS-with-FUSE.html#requirements)。
+
 #### 编码风格
 
--   请遵循已有代码的风格。具体地，我们使用[Google Java style](http://google-styleguide.googlecode.com/svn/trunk/javaguide.html)风格，但有以下不同：
+-   请遵循已有代码的风格。具体地，我们使用[Google Java style](https://google.github.io/styleguide/javaguide.html)风格，但有以下不同：
     -  每行最多**100**个字符
     -  第三方导入被整理到一起以使得IDE格式化起来更简单
     -  类成员变量要使用`m`前缀，例如`private WorkerClient mWorkerClient;`
     -  静态成员变量要使用`s`前缀，例如`public static String sUnderFSAddress;`
+-   Bash脚本遵循[Google Shell style](https://google.github.io/styleguide/shell.xml), 且必须兼容Bash 3.x版本
 -   你可以下载我们提供的[Eclipse formatter](../resources/alluxio-code-formatter-eclipse.xml)
     -  为了让Eclipse能够正确地组织你的导入, 配置"组织导入"以看上去像
        [这样](../resources/eclipse_imports.png)

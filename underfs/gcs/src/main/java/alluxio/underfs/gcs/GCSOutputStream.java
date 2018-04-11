@@ -11,7 +11,7 @@
 
 package alluxio.underfs.gcs;
 
-import alluxio.Constants;
+import alluxio.util.CommonUtils;
 import alluxio.util.io.PathUtils;
 
 import com.google.common.base.Preconditions;
@@ -41,7 +41,7 @@ import javax.annotation.concurrent.NotThreadSafe;
  */
 @NotThreadSafe
 public final class GCSOutputStream extends OutputStream {
-  private static final Logger LOG = LoggerFactory.getLogger(Constants.LOGGER_TYPE);
+  private static final Logger LOG = LoggerFactory.getLogger(GCSOutputStream.class);
 
   /** Bucket name of the Alluxio GCS bucket. */
   private final String mBucketName;
@@ -70,7 +70,6 @@ public final class GCSOutputStream extends OutputStream {
    * @param bucketName the name of the bucket
    * @param key the key of the file
    * @param client the JetS3t client
-   * @throws IOException when a non-Alluxio related error occurs
    */
   public GCSOutputStream(String bucketName, String key, GoogleStorageService client)
       throws IOException {
@@ -79,7 +78,7 @@ public final class GCSOutputStream extends OutputStream {
     mBucketName = bucketName;
     mKey = key;
     mClient = client;
-    mFile = new File(PathUtils.concatPath("/tmp", UUID.randomUUID()));
+    mFile = new File(PathUtils.concatPath(CommonUtils.getTmpDir(), UUID.randomUUID()));
     try {
       mHash = MessageDigest.getInstance("MD5");
       mLocalOutputStream =
@@ -122,7 +121,7 @@ public final class GCSOutputStream extends OutputStream {
       obj.setBucketName(mBucketName);
       obj.setDataInputFile(mFile);
       obj.setContentLength(mFile.length());
-      obj.setContentEncoding(Mimetypes.MIMETYPE_BINARY_OCTET_STREAM);
+      obj.setContentType(Mimetypes.MIMETYPE_BINARY_OCTET_STREAM);
       if (mHash != null) {
         obj.setMd5Hash(mHash.digest());
       } else {

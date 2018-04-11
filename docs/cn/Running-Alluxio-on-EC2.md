@@ -6,10 +6,13 @@ group: Deploying Alluxio
 priority: 3
 ---
 
+* 内容列表
+{:toc}
+
 使用Alluxio自带的[Vagrant脚本](https://github.com/alluxio/alluxio/tree/master/deploy/vagrant)可以将
 Alluxio部署在Amazon EC2上。该脚本允许你创建，配置以及撤销集群。
 
-# 前期准备
+## 前期准备
 
 **安装Vagrant和AWS插件**
 
@@ -21,9 +24,7 @@ Alluxio部署在Amazon EC2上。该脚本允许你创建，配置以及撤销集
 
 **安装Alluxio**
 
-下载Alluxio到本地，并解压：
-
-{% include Common-Commands/download-alluxio.md %}
+下载[Alluxio](https://alluxio.org/download)到你本地的机器上并解压(unzip)。
 
 **安装python库依赖**
 
@@ -37,7 +38,7 @@ Alluxio部署在Amazon EC2上。该脚本允许你创建，配置以及撤销集
 
 {% include Running-Alluxio-on-EC2/install-pip.md %}
 
-# 启动集群
+## 启动集群
 
 要在EC2上运行Alluxio集群，首先在[Amazon Web Services site](http://aws.amazon.com/)注册一个Amazon EC2帐号。
 
@@ -67,7 +68,7 @@ Vagrant脚本默认使用[Amazon S3](http://aws.amazon.com/s3)作为Alluxio的�
 
 集群中的每个节点运行一个Alluxio worker，`AlluxioMaster`节点上运行Alluxio master。
 
-# 访问集群
+## 访问集群
 
 **通过Web UI访问**
 
@@ -109,7 +110,7 @@ Alluxio Web UI的默认端口为**19999**。
 
 {% include Running-Alluxio-on-EC2/ssh-other-node.md %}
 
-# 撤销集群
+## 撤销集群
 
 在`deploy/vagrant`目录下运行：
 

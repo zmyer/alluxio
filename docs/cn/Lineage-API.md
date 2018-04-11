@@ -1,12 +1,12 @@
 ---
 layout: global
-title: 世系关系（Lineage）客户端API（内测版）
-nickname: 世系关系（Lineage）API
+title: （实验版）世系关系（Lineage）客户端API
+nickname: （实验版）世系关系（Lineage）API
 group: Features
-priority: 2
+priority: 99
 ---
 
-* Table of Contents
+* 内容列表
 {:toc}
 
 Alluxio可以利用*世系关系（Lineage）*达到很高的读写吞吐量，又不影响容错性，丢失的输出数据会通过重新运行生成该数据的作业来进行恢复。
@@ -56,7 +56,6 @@ Alluxio提供了Java版本的API来操作和访问世系关系信息。
 
 <table class="table table-striped">
 <tr><th>参数</th><th>默认值</th><th>介绍</th></tr>
-</tr>
 {% for record in site.data.table.LineageParameter %}
 <tr>
   <td>{{record.parameter}}</td>

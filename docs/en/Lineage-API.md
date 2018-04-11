@@ -1,9 +1,9 @@
 ---
 layout: global
-title: Lineage Client API (alpha)
-nickname: Lineage API
+title: (Experimental) Lineage Client API
+nickname: (Experimental) Lineage API
 group: Features
-priority: 2
+priority: 99
 ---
 
 * Table of Contents
@@ -18,12 +18,12 @@ recomputation* to restore the lost files. Lineage assumes that jobs are determin
 recomputed outputs are identical. If this assumption is not met, it is up to the application to
 handle divergent outputs.
 
-# Enable Lineage
+## Enable Lineage
 
 By default, lineage is not enabled. It can be enabled by setting the
 `alluxio.user.lineage.enabled` property to `true` in the configuration file.
 
-# Lineage API
+## Lineage API
 
 Alluxio provides a Java like API for managing and accessing lineage information.
 
@@ -69,13 +69,12 @@ flag. For example:
 
 {% include Lineage-API/delete-cascade.md %}
 
-# Configuration Parameters For Lineage
+## Configuration Parameters For Lineage
 
 These are the configuration parameters related to Alluxio's lineage feature.
 
 <table class="table table-striped">
 <tr><th>Parameter</th><th>Default Value</th><th>Description</th></tr>
-</tr>
 {% for record in site.data.table.LineageParameter %}
 <tr>
   <td>{{record.parameter}}</td>

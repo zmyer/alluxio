@@ -11,8 +11,9 @@
 
 package alluxio.rest;
 
-import alluxio.CommonTestUtils;
+import alluxio.test.util.CommonUtils;
 
+import org.apache.commons.lang.RandomStringUtils;
 import org.junit.Assert;
 import org.junit.Test;
 
@@ -34,6 +35,7 @@ public class TestCaseOptionsTest {
     Assert.assertNull(options.getBody());
     Assert.assertNull(options.getInputStream());
     Assert.assertFalse(options.isPrettyPrint());
+    Assert.assertNull(options.getMD5());
   }
 
   /**
@@ -48,18 +50,21 @@ public class TestCaseOptionsTest {
     InputStream inputStream = new ByteArrayInputStream(bytes);
     boolean prettyPrint = random.nextBoolean();
     TestCaseOptions options = TestCaseOptions.defaults();
+    String md5 = RandomStringUtils.random(64);
 
     options.setBody(body);
     options.setInputStream(inputStream);
     options.setPrettyPrint(prettyPrint);
+    options.setMD5(md5);
 
     Assert.assertEquals(body, options.getBody());
     Assert.assertEquals(inputStream, options.getInputStream());
     Assert.assertEquals(prettyPrint, options.isPrettyPrint());
+    Assert.assertEquals(md5, options.getMD5());
   }
 
   @Test
   public void equals() throws Exception {
-    CommonTestUtils.testEquals(TestCaseOptions.class, "mInputStream");
+    CommonUtils.testEquals(TestCaseOptions.class, "mInputStream");
   }
 }

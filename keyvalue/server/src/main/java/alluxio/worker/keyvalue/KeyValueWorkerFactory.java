@@ -12,16 +12,14 @@
 package alluxio.worker.keyvalue;
 
 import alluxio.Configuration;
-import alluxio.Constants;
 import alluxio.PropertyKey;
-import alluxio.worker.Worker;
+import alluxio.underfs.UfsManager;
 import alluxio.worker.WorkerFactory;
+import alluxio.worker.WorkerRegistry;
 import alluxio.worker.block.BlockWorker;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
-import java.util.List;
 
 import javax.annotation.concurrent.ThreadSafe;
 
@@ -30,7 +28,7 @@ import javax.annotation.concurrent.ThreadSafe;
  */
 @ThreadSafe
 public final class KeyValueWorkerFactory implements WorkerFactory {
-  private static final Logger LOG = LoggerFactory.getLogger(Constants.LOGGER_TYPE);
+  private static final Logger LOG = LoggerFactory.getLogger(KeyValueWorkerFactory.class);
 
   /**
    * Constructs a new {@link KeyValueWorkerFactory}.
@@ -38,20 +36,16 @@ public final class KeyValueWorkerFactory implements WorkerFactory {
   public KeyValueWorkerFactory() {}
 
   @Override
-  public KeyValueWorker create(List<? extends Worker> workers) {
-    if (!Configuration.getBoolean(PropertyKey.KEY_VALUE_ENABLED)) {
-      return null;
-    }
-    LOG.info("Creating {} ", KeyValueWorker.class.getName());
+  public boolean isEnabled() {
+    return Configuration.getBoolean(PropertyKey.KEY_VALUE_ENABLED);
+  }
 
-    for (Worker worker : workers) {
-      if (worker instanceof BlockWorker) {
-        LOG.info("{} is created", KeyValueWorker.class.getName());
-        return new KeyValueWorker(((BlockWorker) worker));
-      }
-    }
-    LOG.error("Fail to create {} due to missing {}", KeyValueWorker.class.getName(),
-        BlockWorker.class.getName());
-    return null;
+  @Override
+  public KeyValueWorker create(WorkerRegistry registry, UfsManager ufsManager) {
+    LOG.info("Creating {} ", KeyValueWorker.class.getName());
+    BlockWorker blockWorker = registry.get(BlockWorker.class);
+    KeyValueWorker keyValueWorker = new KeyValueWorker(blockWorker);
+    registry.add(KeyValueWorker.class, keyValueWorker);
+    return keyValueWorker;
   }
 }

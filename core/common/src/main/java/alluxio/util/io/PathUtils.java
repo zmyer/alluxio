@@ -12,6 +12,8 @@
 package alluxio.util.io;
 
 import alluxio.AlluxioURI;
+import alluxio.Configuration;
+import alluxio.PropertyKey;
 import alluxio.exception.ExceptionMessage;
 import alluxio.exception.InvalidPathException;
 import alluxio.util.OSUtils;
@@ -74,14 +76,14 @@ public final class PathUtils {
     Preconditions.checkArgument(paths != null, "Failed to concatPath: a null set of paths");
     List<String> trimmedPathList = new ArrayList<>();
     String trimmedBase =
-        CharMatcher.is(AlluxioURI.SEPARATOR.charAt(0)).trimTrailingFrom(base.toString().trim());
+        CharMatcher.is(AlluxioURI.SEPARATOR.charAt(0)).trimTrailingFrom(base.toString());
     trimmedPathList.add(trimmedBase);
     for (Object path : paths) {
       if (path == null) {
         continue;
       }
       String trimmedPath =
-          CharMatcher.is(AlluxioURI.SEPARATOR.charAt(0)).trimFrom(path.toString().trim());
+          CharMatcher.is(AlluxioURI.SEPARATOR.charAt(0)).trimFrom(path.toString());
       if (!trimmedPath.isEmpty()) {
         trimmedPathList.add(trimmedPath);
       }
@@ -106,7 +108,7 @@ public final class PathUtils {
     String name = FilenameUtils.getName(cleanedPath);
     String parent = cleanedPath.substring(0, cleanedPath.length() - name.length() - 1);
     if (parent.isEmpty()) {
-      // The parent is the root path
+      // The parent is the root path.
       return AlluxioURI.SEPARATOR;
     }
     return parent;
@@ -198,7 +200,7 @@ public final class PathUtils {
    * @throws InvalidPathException If the path is not properly formed
    */
   public static void validatePath(String path) throws InvalidPathException {
-    boolean invalid = (path == null || path.isEmpty() || path.contains(" "));
+    boolean invalid = (path == null || path.isEmpty());
     if (!OSUtils.isWindows()) {
       invalid = (invalid || !path.startsWith(AlluxioURI.SEPARATOR));
     }
@@ -260,6 +262,18 @@ public final class PathUtils {
    */
   public static String normalizePath(String path, String separator) {
     return path.endsWith(separator) ? path : path + separator;
+  }
+
+  /**
+   * @param storageDir the root of a storage directory in tiered storage
+   *
+   * @return the worker data folder path after each storage directory, the final path will be like
+   * "/mnt/ramdisk/alluxioworker" for storage dir "/mnt/ramdisk" by appending
+   * {@link PropertyKey#WORKER_DATA_FOLDER).
+   */
+  public static String getWorkerDataDirectory(String storageDir) {
+    return concatPath(
+        storageDir.trim(), Configuration.get(PropertyKey.WORKER_DATA_FOLDER));
   }
 
   private PathUtils() {} // prevent instantiation

@@ -18,8 +18,6 @@ import alluxio.client.AbstractOutStream;
 import alluxio.util.io.ByteIOUtils;
 
 import com.google.common.base.Preconditions;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 
@@ -40,8 +38,6 @@ import javax.annotation.concurrent.NotThreadSafe;
  */
 @NotThreadSafe
 final class BaseKeyValuePartitionWriter implements KeyValuePartitionWriter {
-  private static final Logger LOG = LoggerFactory.getLogger(Constants.LOGGER_TYPE);
-
   /** Handle to write to the underlying file. */
   private final AbstractOutStream mFileOutStream;
   /** Number of key-value pairs added. */
@@ -63,7 +59,7 @@ final class BaseKeyValuePartitionWriter implements KeyValuePartitionWriter {
    * @param fileOutStream output stream to store the key-value file
    */
   BaseKeyValuePartitionWriter(AbstractOutStream fileOutStream) {
-    mFileOutStream = Preconditions.checkNotNull(fileOutStream);
+    mFileOutStream = Preconditions.checkNotNull(fileOutStream, "fileOutStream");
     // TODO(binfan): write a header in the file
 
     mPayloadWriter = new BasePayloadWriter(mFileOutStream);
@@ -95,8 +91,8 @@ final class BaseKeyValuePartitionWriter implements KeyValuePartitionWriter {
 
   @Override
   public void put(byte[] key, byte[] value) throws IOException {
-    Preconditions.checkNotNull(key);
-    Preconditions.checkNotNull(value);
+    Preconditions.checkNotNull(key, "key");
+    Preconditions.checkNotNull(value, "value");
     Preconditions.checkArgument(key.length > 0, "Cannot put an empty key");
     Preconditions.checkArgument(value.length > 0, "Cannot put an empty value");
     Preconditions.checkState(!mClosed);
